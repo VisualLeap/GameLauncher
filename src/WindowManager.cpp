@@ -309,46 +309,63 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
             
+            // Create off-screen buffer for double buffering
+            int width = clientRect.right - clientRect.left;
+            int height = clientRect.bottom - clientRect.top;
+            
+            HDC hdcBuffer = CreateCompatibleDC(hdc);
+            HBITMAP hbmBuffer = CreateCompatibleBitmap(hdc, width, height);
+            HBITMAP hbmOld = (HBITMAP)SelectObject(hdcBuffer, hbmBuffer);
+            
+            // Draw everything to the buffer
             // Draw modern background
-            DrawModernBackground(hdc, clientRect);
+            DrawModernBackground(hdcBuffer, clientRect);
             
             // Draw tabs if we have any
             if (!tabs.empty()) {
-                DrawTabs(hdc, clientRect);
+                DrawTabs(hdcBuffer, clientRect);
                 
                 // Draw grid in the remaining area
                 RECT gridRect = GetGridRect(clientRect);
                 if (gridRenderer && activeTabIndex >= 0 && activeTabIndex < static_cast<int>(tabs.size())) {
                     // Set up clipping region to prevent icons from drawing over tabs
                     HRGN clipRegion = CreateRectRgn(gridRect.left, gridRect.top, gridRect.right, gridRect.bottom);
-                    SelectClipRgn(hdc, clipRegion);
+                    SelectClipRgn(hdcBuffer, clipRegion);
                     
                     gridRenderer->SetShortcuts(&tabs[activeTabIndex].shortcuts);
                     gridRenderer->SetScrollOffset(scrollOffset);
                     gridRenderer->SetSelectedIcon(selectedIconIndex);
                     gridRenderer->SetDpiScaleFactor(GetDpiScaleFactor()); // Set DPI scale factor
-                    gridRenderer->Render(hdc, gridRect);
+                    gridRenderer->Render(hdcBuffer, gridRect);
                     
                     // Restore clipping region
-                    SelectClipRgn(hdc, nullptr);
+                    SelectClipRgn(hdcBuffer, nullptr);
                     DeleteObject(clipRegion);
                 }
             } else {
                 // Show "No shortcuts found" message
-                SetTextColor(hdc, RGB(255, 255, 255));
-                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdcBuffer, RGB(255, 255, 255));
+                SetBkMode(hdcBuffer, TRANSPARENT);
                 
                 HFONT hFont = CreateFont(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-                HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+                HFONT hOldFont = (HFONT)SelectObject(hdcBuffer, hFont);
                 
                 std::wstring noShortcutsMsg = L"No shortcuts found in Data folder";
-                DrawText(hdc, noShortcutsMsg.c_str(), -1, &clientRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawText(hdcBuffer, noShortcutsMsg.c_str(), -1, &clientRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 
-                SelectObject(hdc, hOldFont);
+                SelectObject(hdcBuffer, hOldFont);
                 DeleteObject(hFont);
             }
+            
+            // Copy the buffer to the screen in one operation (eliminates flicker)
+            BitBlt(hdc, 0, 0, width, height, hdcBuffer, 0, 0, SRCCOPY);
+            
+            // Clean up
+            SelectObject(hdcBuffer, hbmOld);
+            DeleteObject(hbmBuffer);
+            DeleteDC(hdcBuffer);
             
             EndPaint(hwnd, &ps);
             return 0;
@@ -1097,7 +1114,7 @@ void WindowManager::DrawTabs(HDC hdc, const RECT& clientRect) {
     
     HFONT hFont = CreateFont(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     HFONT hOldFont = (HFONT)SelectObject(memDC, hFont);
     
     int tabWidth = width / static_cast<int>(tabs.size());
@@ -1159,15 +1176,9 @@ void WindowManager::DrawTabs(HDC hdc, const RECT& clientRect) {
     SelectObject(memDC, hOldFont);
     DeleteObject(hFont);
     
-    // Blend to main DC
-    BLENDFUNCTION blendFunc = {0};
-    blendFunc.BlendOp = AC_SRC_OVER;
-    blendFunc.BlendFlags = 0;
-    blendFunc.SourceConstantAlpha = 255;
-    blendFunc.AlphaFormat = AC_SRC_ALPHA;
-    
-    AlphaBlend(hdc, tabBarRect.left, tabBarRect.top, width, height,
-               memDC, 0, 0, width, height, blendFunc);
+    // Use BitBlt instead of AlphaBlend since tabs are fully opaque
+    BitBlt(hdc, tabBarRect.left, tabBarRect.top, width, height,
+           memDC, 0, 0, SRCCOPY);
     
     // Cleanup
     SelectObject(memDC, oldBitmap);
