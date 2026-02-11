@@ -1,0 +1,21 @@
+# Visual Studio
+.vs/
+*.user
+
+# Kiro IDE
+.kiro/
+
+# Compiled executables (in root)
+/*.exe
+/*.pdb
+/*.ilk
+
+# Backup files
+bk/
+
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+
+# Folder config file
+Desktop.ini

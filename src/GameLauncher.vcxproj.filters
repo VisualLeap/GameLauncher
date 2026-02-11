@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components">
+      <UniqueIdentifier>{12345678-1234-5678-9ABC-DEF123456789}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="GameLauncher.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="DataModels.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="WindowManager.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="TrayManager.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="ShortcutScanner.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="ShortcutParser.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="IconExtractor.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="GridRenderer.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Resource Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ControllerManager.h">
+      <Filter>Components</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="GameLauncher.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="GameLauncher_impl.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="WindowManager.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="TrayManager.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="ShortcutScanner.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="ShortcutParser.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="IconExtractor.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="GridRenderer.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="ControllerManager.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="GameLauncher.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Launcher.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+  </ItemGroup>
+</Project>

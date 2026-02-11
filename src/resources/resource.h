@@ -1,0 +1,3 @@
+#define IDI_GAMELAUNCHER 101
+#define IDI_SMALL 102
+

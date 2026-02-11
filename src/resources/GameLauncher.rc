@@ -1,0 +1,5 @@
+#include "resource.h"
+#include "windows.h"
+
+IDI_GAMELAUNCHER ICON "Launcher.ico"
+IDI_SMALL ICON "Launcher.ico"
