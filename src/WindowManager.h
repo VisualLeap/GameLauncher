@@ -61,6 +61,14 @@ private:
     int mouseScrollSpeed;           // Mouse wheel scroll speed (pixels per notch)
     int joystickScrollSpeed;        // Joystick scroll speed multiplier
     
+    // Persistent offscreen buffer for double buffering (to avoid memory fragmentation)
+    HDC offscreenDC;
+    HBITMAP offscreenBitmap;
+    HBITMAP oldBitmap;
+    int offscreenWidth;
+    int offscreenHeight;
+    bool isResizing;                // Track if window is being resized
+    
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleCommand(WPARAM wParam, LPARAM lParam);

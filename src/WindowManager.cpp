@@ -33,10 +33,27 @@ WindowManager::WindowManager()
     , tabInactiveColor(RGB(70, 70, 77))     // Default gray
     , mouseScrollSpeed(60)                  // Default mouse scroll speed (pixels per notch)
     , joystickScrollSpeed(120)              // Default joystick scroll speed multiplier
+    , offscreenDC(nullptr)
+    , offscreenBitmap(nullptr)
+    , oldBitmap(nullptr)
+    , offscreenWidth(0)
+    , offscreenHeight(0)
+    , isResizing(false)
 {
 }
 
 WindowManager::~WindowManager() {
+    // Clean up offscreen buffer
+    if (offscreenDC) {
+        if (oldBitmap) {
+            SelectObject(offscreenDC, oldBitmap);
+        }
+        if (offscreenBitmap) {
+            DeleteObject(offscreenBitmap);
+        }
+        DeleteDC(offscreenDC);
+    }
+    
     if (mainWindow) {
         DestroyWindow(mainWindow);
     }
@@ -93,7 +110,7 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr; // We'll draw our own background
+    wc.hbrBackground = CreateSolidBrush(DesignConstants::BACKGROUND_COLOR); // Dark background to prevent white flash
     wc.lpszClassName = WINDOW_CLASS_NAME;
     wc.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_GAMELAUNCHER));
     wc.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SMALL));
@@ -140,7 +157,7 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
         WS_EX_LAYERED | WS_EX_TOOLWINDOW,      // Enable layered window for transparency + hide from taskbar
         WINDOW_CLASS_NAME,
         L"Game Launcher",
-        WS_POPUP | WS_THICKFRAME | WS_VISIBLE,  // Keep WS_VISIBLE
+        WS_POPUP | WS_THICKFRAME,               // Remove WS_VISIBLE - will show after first paint
         x, y, windowWidth, windowHeight,
         nullptr, nullptr, hInstance, this
     );
@@ -309,63 +326,75 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
             
-            // Create off-screen buffer for double buffering
             int width = clientRect.right - clientRect.left;
             int height = clientRect.bottom - clientRect.top;
             
-            HDC hdcBuffer = CreateCompatibleDC(hdc);
-            HBITMAP hbmBuffer = CreateCompatibleBitmap(hdc, width, height);
-            HBITMAP hbmOld = (HBITMAP)SelectObject(hdcBuffer, hbmBuffer);
+            // Create or resize offscreen buffer if needed (but not during active resize)
+            if ((!offscreenDC || offscreenWidth != width || offscreenHeight != height) && !isResizing) {
+                // Clean up old buffer if it exists
+                if (offscreenDC) {
+                    if (oldBitmap) {
+                        SelectObject(offscreenDC, oldBitmap);
+                    }
+                    if (offscreenBitmap) {
+                        DeleteObject(offscreenBitmap);
+                    }
+                    DeleteDC(offscreenDC);
+                }
+                
+                // Create new buffer
+                offscreenDC = CreateCompatibleDC(hdc);
+                offscreenBitmap = CreateCompatibleBitmap(hdc, width, height);
+                oldBitmap = (HBITMAP)SelectObject(offscreenDC, offscreenBitmap);
+                offscreenWidth = width;
+                offscreenHeight = height;
+                OutputDebugString(L"AAAAAAAAAAAAAAAA\n");
+            }
             
-            // Draw everything to the buffer
+            // Draw everything to the persistent buffer
             // Draw modern background
-            DrawModernBackground(hdcBuffer, clientRect);
+            DrawModernBackground(offscreenDC, clientRect);
             
             // Draw tabs if we have any
             if (!tabs.empty()) {
-                DrawTabs(hdcBuffer, clientRect);
+                DrawTabs(offscreenDC, clientRect);
                 
                 // Draw grid in the remaining area
                 RECT gridRect = GetGridRect(clientRect);
                 if (gridRenderer && activeTabIndex >= 0 && activeTabIndex < static_cast<int>(tabs.size())) {
                     // Set up clipping region to prevent icons from drawing over tabs
                     HRGN clipRegion = CreateRectRgn(gridRect.left, gridRect.top, gridRect.right, gridRect.bottom);
-                    SelectClipRgn(hdcBuffer, clipRegion);
+                    SelectClipRgn(offscreenDC, clipRegion);
                     
                     gridRenderer->SetShortcuts(&tabs[activeTabIndex].shortcuts);
                     gridRenderer->SetScrollOffset(scrollOffset);
                     gridRenderer->SetSelectedIcon(selectedIconIndex);
                     gridRenderer->SetDpiScaleFactor(GetDpiScaleFactor()); // Set DPI scale factor
-                    gridRenderer->Render(hdcBuffer, gridRect);
+                    gridRenderer->Render(offscreenDC, gridRect);
                     
                     // Restore clipping region
-                    SelectClipRgn(hdcBuffer, nullptr);
+                    SelectClipRgn(offscreenDC, nullptr);
                     DeleteObject(clipRegion);
                 }
             } else {
                 // Show "No shortcuts found" message
-                SetTextColor(hdcBuffer, RGB(255, 255, 255));
-                SetBkMode(hdcBuffer, TRANSPARENT);
+                SetTextColor(offscreenDC, RGB(255, 255, 255));
+                SetBkMode(offscreenDC, TRANSPARENT);
                 
                 HFONT hFont = CreateFont(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-                HFONT hOldFont = (HFONT)SelectObject(hdcBuffer, hFont);
+                HFONT hOldFont = (HFONT)SelectObject(offscreenDC, hFont);
                 
                 std::wstring noShortcutsMsg = L"No shortcuts found in Data folder";
-                DrawText(hdcBuffer, noShortcutsMsg.c_str(), -1, &clientRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawText(offscreenDC, noShortcutsMsg.c_str(), -1, &clientRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 
-                SelectObject(hdcBuffer, hOldFont);
+                SelectObject(offscreenDC, hOldFont);
                 DeleteObject(hFont);
             }
             
-            // Copy the buffer to the screen in one operation (eliminates flicker)
-            BitBlt(hdc, 0, 0, width, height, hdcBuffer, 0, 0, SRCCOPY);
-            
-            // Clean up
-            SelectObject(hdcBuffer, hbmOld);
-            DeleteObject(hbmBuffer);
-            DeleteDC(hdcBuffer);
+            // Copy the persistent buffer to the screen in one operation (eliminates flicker)
+            BitBlt(hdc, 0, 0, width, height, offscreenDC, 0, 0, SRCCOPY);
             
             EndPaint(hwnd, &ps);
             return 0;
@@ -403,6 +432,18 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             
         case WM_MOUSEWHEEL:
             HandleMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+            return 0;
+            
+        case WM_ENTERSIZEMOVE:
+            // User started resizing or moving the window
+            isResizing = true;
+            return 0;
+            
+        case WM_EXITSIZEMOVE:
+            // User finished resizing or moving the window
+            isResizing = false;
+            // Force buffer recreation on next paint
+            InvalidateRect(mainWindow, nullptr, FALSE);
             return 0;
             
         case WM_SIZE:
