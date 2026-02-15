@@ -36,5 +36,5 @@ private:
     bool IsValidIcon(HICON icon);
     
     // Constants
-    static const int REQUIRED_ICON_SIZE = DesignConstants::ICON_SIZE;
+    static const int REQUIRED_ICON_SIZE = DesignConstants::TARGET_ICON_SIZE_PIXELS;
 };

@@ -2,16 +2,40 @@
 #include "GridRenderer.h"
 #include <algorithm>
 #include <cmath>
+#include <commctrl.h>
+
+#pragma comment(lib, "comctl32.lib")
 
 GridRenderer::GridRenderer() 
     : shortcuts(nullptr)
     , selectedIconIndex(-1)
     , scrollOffset(0)
     , dpiScaleFactor(1.0f)
+    , cachedFont(nullptr)
+    , cachedSelectionPen(nullptr)
+    , cachedShadowPen(nullptr)
 {
+    // Create cached font
+    cachedFont = CreateFont(36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    
+    // Create cached pens for selection borders
+    cachedSelectionPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(255, 255, 255));
+    cachedShadowPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(64, 64, 64));
 }
 
 GridRenderer::~GridRenderer() {
+    // Clean up cached GDI objects
+    if (cachedFont) {
+        DeleteObject(cachedFont);
+    }
+    if (cachedSelectionPen) {
+        DeleteObject(cachedSelectionPen);
+    }
+    if (cachedShadowPen) {
+        DeleteObject(cachedShadowPen);
+    }
 }
 
 void GridRenderer::SetShortcuts(std::vector<ShortcutInfo>* shortcutList) {
@@ -20,13 +44,9 @@ void GridRenderer::SetShortcuts(std::vector<ShortcutInfo>* shortcutList) {
 
 void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
 
-    // Set up text rendering (common for both branches)
+    // Set up text rendering
     SetBkMode(hdc, TRANSPARENT);
-    
-    HFONT hFont = CreateFont(28, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, cachedFont);
     
     if (!shortcuts || shortcuts->empty()) {
         // Draw "No shortcuts found" message
@@ -38,7 +58,6 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
         
         // Cleanup and return
         SelectObject(hdc, hOldFont);
-        DeleteObject(hFont);
         return;
     }
     
@@ -63,22 +82,32 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
         bool isSelected = (static_cast<int>(i) == selectedIconIndex);
         
         // Draw the icon with modern effects
-        if (shortcut.largeIcon) {
-            DrawIconWithModernEffects(hdc, shortcut.largeIcon, iconRect, false, isSelected);
+        if (shortcut.iconBitmap) {
+            DrawIconWithModernEffects(hdc, shortcut.iconBitmap, shortcut.iconBitmapWidth, shortcut.iconBitmapHeight, 
+                                     iconRect, false, isSelected);
             
             // Draw selection indicator
             if (isSelected) {
                 RECT selectionRect = iconRect;
-                InflateRect(&selectionRect, 3, 3);
-                HPEN selectionPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-                HPEN oldPen = (HPEN)SelectObject(hdc, selectionPen);
-                HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                InflateRect(&selectionRect, DesignConstants::SELECTION_BORDER_INFLATE, DesignConstants::SELECTION_BORDER_INFLATE);
                 
+                // Draw red shadow outline first (offset by 2px)
+                RECT shadowRect = selectionRect;
+                int shadowOffset = 2;
+                shadowRect.left += shadowOffset;
+                shadowRect.top += shadowOffset;
+                shadowRect.right += shadowOffset;
+                shadowRect.bottom += shadowOffset;
+                HPEN oldPen = (HPEN)SelectObject(hdc, cachedShadowPen);
+                HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, shadowRect.left, shadowRect.top, shadowRect.right, shadowRect.bottom);
+                
+                // Draw white selection outline on top
+                SelectObject(hdc, cachedSelectionPen);
                 Rectangle(hdc, selectionRect.left, selectionRect.top, selectionRect.right, selectionRect.bottom);
                 
                 SelectObject(hdc, oldPen);
                 SelectObject(hdc, oldBrush);
-                DeleteObject(selectionPen);
             }
         } else {
             // Draw placeholder for missing icon
@@ -99,7 +128,6 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
     
     // Cleanup
     SelectObject(hdc, hOldFont);
-    DeleteObject(hFont);
 }
 
 int GridRenderer::GetClickedShortcut(POINT clickPoint, const RECT& clientRect) {
@@ -186,7 +214,8 @@ RECT GridRenderer::GetIconRect(int index, int cols, int startX, int startY) {
     return iconRect;
 }
 
-void GridRenderer::DrawIconWithModernEffects(HDC hdc, HICON icon, const RECT& iconRect, bool isHovered, bool isSelected) {
+void GridRenderer::DrawIconWithModernEffects(HDC hdc, HBITMAP iconBitmap, int bitmapWidth, int bitmapHeight,
+                                             const RECT& iconRect, bool isHovered, bool isSelected) {
     // Draw selection border if selected
     if (isSelected) {
         RECT selectionRect = iconRect;
@@ -205,26 +234,20 @@ void GridRenderer::DrawIconWithModernEffects(HDC hdc, HICON icon, const RECT& ic
         DeleteObject(hoverBrush);
     }
     
-    // Draw the icon at DPI-aware size - this ensures it's always 256 physical pixels
+    // Draw the icon using cached bitmap with AlphaBlend for proper alpha compositing
     int physicalIconSize = GetPhysicalIconSize();
     
-    DrawIconEx(hdc, iconRect.left, iconRect.top, icon, physicalIconSize, physicalIconSize, 0, nullptr, DI_NORMAL);
-}
-
-void GridRenderer::DrawHoverEffect(HDC hdc, const RECT& iconRect) {
-    RECT hoverRect = iconRect;
-    InflateRect(&hoverRect, 4, 4);
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, iconBitmap);
     
-    // Draw glowing border effect
-    DrawRect(hdc, hoverRect, DesignConstants::HOVER_COLOR);
-}
-
-void GridRenderer::DrawSelectionEffect(HDC hdc, const RECT& iconRect) {
-    RECT selectionRect = iconRect;
-    InflateRect(&selectionRect, 6, 6);
+    // Use AlphaBlend to properly composite icon with alpha channel
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    AlphaBlend(hdc, iconRect.left, iconRect.top, physicalIconSize, physicalIconSize,
+              hdcMem, 0, 0, bitmapWidth, bitmapHeight, blend);
     
-    // Draw accent color border for selection
-    DrawRect(hdc, selectionRect, DesignConstants::ACCENT_COLOR);
+    // Cleanup
+    SelectObject(hdcMem, hbmOld);
+    DeleteDC(hdcMem);
 }
 
 void GridRenderer::DrawIconLabel(HDC hdc, const std::wstring& text, const RECT& labelRect) {
@@ -232,13 +255,23 @@ void GridRenderer::DrawIconLabel(HDC hdc, const std::wstring& text, const RECT& 
         return;
     }
     
-    // Use the full text without truncation
-    std::wstring displayText = text;
-    
-    // Draw text centered with word wrapping
+    // Draw thicker shadow by calling DrawShadowText twice with different offsets
     RECT textRect = labelRect;
-    DrawText(hdc, displayText.c_str(), -1, &textRect, 
-             DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    int textLength = static_cast<int>(text.length());
+    
+    // First shadow layer (larger offset)
+    DrawShadowText(hdc, text.c_str(), textLength, &textRect,
+                   DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX,
+                   RGB(255, 255, 255),  // White text
+                   RGB(0, 0, 0),        // Black shadow
+                   3, 3);               // Larger offset
+    
+    // Second shadow layer (smaller offset for thickness)
+    DrawShadowText(hdc, text.c_str(), textLength, &textRect,
+                   DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX,
+                   RGB(255, 255, 255),  // White text
+                   RGB(0, 0, 0),        // Black shadow
+                   1, 1);               // Smaller offset
 }
 
 void GridRenderer::DrawRect(HDC hdc, const RECT& rect, COLORREF color) {

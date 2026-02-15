@@ -43,7 +43,6 @@ private:
     TrayManager* trayManager; // Non-owning pointer
     ShortcutScanner* shortcutScanner; // Non-owning pointer
     bool isDragging;
-    POINT dragStartPoint;
     std::vector<TabInfo> tabs; // Tab data
     int activeTabIndex; // Currently active tab
     int savedActiveTabIndex; // Saved active tab from INI file
@@ -65,9 +64,19 @@ private:
     HDC offscreenDC;
     HBITMAP offscreenBitmap;
     HBITMAP oldBitmap;
+    void* offscreenBits;            // Direct access to bitmap pixels for alpha manipulation
     int offscreenWidth;
     int offscreenHeight;
     bool isResizing;                // Track if window is being resized
+    
+    // Cached tab buffer for performance
+    HDC tabBufferDC;
+    HBITMAP tabBufferBitmap;
+    HBITMAP oldTabBitmap;
+    void* tabBufferBits;
+    int tabBufferWidth;
+    int tabBufferHeight;
+    bool tabBufferDirty;            // Track if tabs need redrawing
     
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -85,8 +94,6 @@ private:
     void SetSelectedIcon(int iconIndex, bool fromKeyboard = false); // New method to set selected icon
     void LaunchSelectedIcon();          // New method to launch selected icon
     void EnsureSelectedIconVisible();   // New method to scroll selected icon into view
-    void DrawModernBackground(HDC hdc, const RECT& rect);
-    void DrawGradientBackground(HDC hdc, const RECT& rect);  // New method for gradient effect
     void DrawTabs(HDC hdc, const RECT& clientRect);  // New method to draw tabs
     void LoadShortcuts();
     

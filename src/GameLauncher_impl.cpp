@@ -43,9 +43,6 @@ bool GameLauncher::Initialize() {
     // Create message window for inter-process communication
     CreateMessageWindow();
     
-    // Load configuration
-    LoadConfiguration();
-    
     // Set shortcut folder to Data subfolder
     std::wstring dataFolder = L"Data";
     config.shortcutFolder = dataFolder;
@@ -110,9 +107,7 @@ int GameLauncher::Run() {
 }
 
 void GameLauncher::Shutdown() {
-    // Save configuration
-    SaveConfiguration();
-    
+   
     // Clean up components in reverse order
     scanner.reset();
     trayManager.reset();
@@ -208,14 +203,4 @@ LRESULT CALLBACK GameLauncher::MessageWindowProc(HWND hwnd, UINT uMsg, WPARAM wP
     }
     
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
-}
-
-void GameLauncher::LoadConfiguration() {
-    // For now, use defaults
-    // TODO: Load from registry or config file in future tasks
-}
-
-void GameLauncher::SaveConfiguration() {
-    // For now, do nothing
-    // TODO: Save to registry or config file in future tasks
 }

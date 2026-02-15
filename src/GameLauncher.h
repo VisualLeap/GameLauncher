@@ -36,8 +36,6 @@ private:
     // Private methods
     bool CheckSingleInstance();
     void CreateMessageWindow();
-    void LoadConfiguration();
-    void SaveConfiguration();
     
     // Static window procedure for message window
     static LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);

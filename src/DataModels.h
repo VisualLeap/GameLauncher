@@ -13,21 +13,25 @@ struct ShortcutInfo {
     std::wstring workingDirectory; // Working directory
     std::wstring iconPath;         // Icon file path
     int iconIndex;                 // Icon index in file
-    HICON largeIcon;              // Cached 128x128 icon
+    HBITMAP iconBitmap;           // Cached 32-bit ARGB bitmap for alpha blending
+    int iconBitmapWidth;          // Bitmap width
+    int iconBitmapHeight;         // Bitmap height
     bool isValid;                 // Whether shortcut is functional
     
     // Constructor
     ShortcutInfo() 
         : iconIndex(0)
-        , largeIcon(nullptr)
+        , iconBitmap(nullptr)
+        , iconBitmapWidth(0)
+        , iconBitmapHeight(0)
         , isValid(false) 
     {}
     
-    // Destructor to clean up icon handle
+    // Destructor to clean up bitmap handle
     ~ShortcutInfo() {
-        if (largeIcon) {
-            DestroyIcon(largeIcon);
-            largeIcon = nullptr;
+        if (iconBitmap) {
+            DeleteObject(iconBitmap);
+            iconBitmap = nullptr;
         }
     }
     
@@ -39,18 +43,20 @@ struct ShortcutInfo {
         , workingDirectory(std::move(other.workingDirectory))
         , iconPath(std::move(other.iconPath))
         , iconIndex(other.iconIndex)
-        , largeIcon(other.largeIcon)
+        , iconBitmap(other.iconBitmap)
+        , iconBitmapWidth(other.iconBitmapWidth)
+        , iconBitmapHeight(other.iconBitmapHeight)
         , isValid(other.isValid)
     {
-        other.largeIcon = nullptr; // Transfer ownership
+        other.iconBitmap = nullptr; // Transfer ownership
     }
     
     // Move assignment operator
     ShortcutInfo& operator=(ShortcutInfo&& other) noexcept {
         if (this != &other) {
-            // Clean up existing icon
-            if (largeIcon) {
-                DestroyIcon(largeIcon);
+            // Clean up existing bitmap
+            if (iconBitmap) {
+                DeleteObject(iconBitmap);
             }
             
             // Move data
@@ -60,10 +66,12 @@ struct ShortcutInfo {
             workingDirectory = std::move(other.workingDirectory);
             iconPath = std::move(other.iconPath);
             iconIndex = other.iconIndex;
-            largeIcon = other.largeIcon;
+            iconBitmap = other.iconBitmap;
+            iconBitmapWidth = other.iconBitmapWidth;
+            iconBitmapHeight = other.iconBitmapHeight;
             isValid = other.isValid;
             
-            other.largeIcon = nullptr; // Transfer ownership
+            other.iconBitmap = nullptr; // Transfer ownership
         }
         return *this;
     }
@@ -127,20 +135,14 @@ struct DesignConstants {
     static const COLORREF BACKGROUND_COLOR = RGB(28, 28, 30);      // Dark charcoal
     static const COLORREF ACCENT_COLOR = RGB(0, 122, 255);         // Modern blue
     static const COLORREF HOVER_COLOR = RGB(255, 255, 255);        // White highlight
-    static const COLORREF ERROR_COLOR = RGB(255, 69, 58);          // Red for errors
-    static const int HOVER_ANIMATION_DURATION = 150;               // Smooth transitions
     static const int TARGET_ICON_SIZE_PIXELS = 256;                // Target physical icon size in pixels
-    static const int ICON_SIZE = 256;                              // Logical icon size (will be adjusted for DPI)
-    static const int ICON_PADDING = 16;                            // Space between icons
+    static const int ICON_PADDING = 30;                            // Space between icons
     static const int GRID_MARGIN = 24;                             // Grid margins
-    static const int WINDOW_OPACITY = 242;                         // ~86% opacity
-    static const int TAB_HEIGHT = 40;                              // Tab bar height (reduced from 60)
-    static const int TAB_PADDING = 12;                             // Tab padding
-    static const COLORREF TAB_ACTIVE_COLOR = RGB(19, 147, 98);     // Active tab color (0x139362)
-    static const COLORREF TAB_INACTIVE_COLOR = RGB(60, 60, 67);    // Inactive tab color
-    static const COLORREF TAB_TEXT_COLOR = RGB(255, 255, 255);     // Tab text color
-    static const int LABEL_HEIGHT = 57;                            // Icon label height (increased to accommodate 2-3 lines)
+    static const int TAB_HEIGHT = 40;                              // Tab bar height
+    static const int LABEL_HEIGHT = 70;                            // Icon label height
     static const int LABEL_SPACING = 8;                            // Spacing between icon and label
-    static const int SELECTION_EFFECT_MARGIN = 10;                 // Margin for selection effects in repaint optimization
+    static const int SELECTION_BORDER_INFLATE = 3;                 // InflateRect amount for selection border
+    static const int SELECTION_BORDER_PEN_WIDTH = 4;               // Selection border pen width
+    static const int SELECTION_BORDER_EXTENSION = SELECTION_BORDER_INFLATE + SELECTION_BORDER_PEN_WIDTH / 2; // Total extension above/below icon
     static const int SELECTION_BORDER_PADDING = 4;                 // Padding for selection border
 };

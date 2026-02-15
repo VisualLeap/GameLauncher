@@ -264,7 +264,101 @@ bool ShortcutScanner::ProcessShortcutFile(const std::wstring& filePath, Shortcut
             icon = iconExtractor->ExtractFromExecutable(info.targetPath, info.iconIndex);
         }
         
-        info.largeIcon = icon;
+        // Convert HICON to 32-bit ARGB bitmap for efficient alpha blending
+        if (icon) {
+            // Get icon info (size and mask)
+            ICONINFO iconInfo;
+            if (GetIconInfo(icon, &iconInfo)) {
+                BITMAP bm;
+                GetObject(iconInfo.hbmColor ? iconInfo.hbmColor : iconInfo.hbmMask, sizeof(BITMAP), &bm);
+                int iconWidth = bm.bmWidth;
+                int iconHeight = bm.bmHeight;
+                
+                // Create a 32-bit ARGB DIB section
+                BITMAPINFO bmi = {};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = iconWidth;
+                bmi.bmiHeader.biHeight = -iconHeight;  // Top-down
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                
+                void* bits = nullptr;
+                HDC hdcScreen = GetDC(nullptr);
+                HBITMAP hbm = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+                
+                if (hbm && bits) {
+                    // Fill with background color to fix antialiasing
+                    DWORD* pixels = (DWORD*)bits;
+                    COLORREF bgColor = RGB(28, 28, 30);  // DesignConstants::BACKGROUND_COLOR
+                    BYTE bgR = GetRValue(bgColor);
+                    BYTE bgG = GetGValue(bgColor);
+                    BYTE bgB = GetBValue(bgColor);
+                    DWORD bgPixel = (bgB << 16) | (bgG << 8) | bgR;  // BGR format for DIB
+                    
+                    for (int i = 0; i < iconWidth * iconHeight; i++) {
+                        pixels[i] = bgPixel;
+                    }
+                    
+                    // Draw icon to bitmap (will blend with background color)
+                    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+                    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbm);
+                    DrawIconEx(hdcMem, 0, 0, icon, iconWidth, iconHeight, 0, nullptr, DI_NORMAL);
+                    SelectObject(hdcMem, hbmOld);
+                    DeleteDC(hdcMem);
+                    
+                    // Read mask bitmap data efficiently using GetDIBits
+                    if (iconInfo.hbmMask) {
+                        BITMAPINFO maskBmi = {};
+                        maskBmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                        maskBmi.bmiHeader.biWidth = iconWidth;
+                        maskBmi.bmiHeader.biHeight = -iconHeight;  // Top-down
+                        maskBmi.bmiHeader.biPlanes = 1;
+                        maskBmi.bmiHeader.biBitCount = 32;
+                        maskBmi.bmiHeader.biCompression = BI_RGB;
+                        
+                        DWORD* maskBits = new DWORD[iconWidth * iconHeight];
+                        HDC hdcMask = CreateCompatibleDC(hdcScreen);
+                        
+                        if (GetDIBits(hdcMask, iconInfo.hbmMask, 0, iconHeight, maskBits, &maskBmi, DIB_RGB_COLORS)) {
+                            // Set alpha based on mask (white in mask = transparent, black = opaque)
+                            for (int i = 0; i < iconWidth * iconHeight; i++) {
+                                DWORD maskPixel = maskBits[i];
+                                BYTE maskLuminance = (maskPixel & 0xFF);  // Get blue channel (BGR format)
+                                
+                                if (maskLuminance > 128) {
+                                    // Transparent pixel - set alpha to 0
+                                    pixels[i] = 0;
+                                } else {
+                                    // Opaque pixel - set alpha to 255 and premultiply
+                                    BYTE r = (pixels[i] >> 16) & 0xFF;
+                                    BYTE g = (pixels[i] >> 8) & 0xFF;
+                                    BYTE b = pixels[i] & 0xFF;
+                                    pixels[i] = (255 << 24) | (r << 16) | (g << 8) | b;
+                                }
+                            }
+                        }
+                        
+                        delete[] maskBits;
+                        DeleteDC(hdcMask);
+                    }
+                    
+                    // Store the bitmap
+                    info.iconBitmap = hbm;
+                    info.iconBitmapWidth = iconWidth;
+                    info.iconBitmapHeight = iconHeight;
+                }
+                
+                // Clean up iconInfo bitmaps
+                if (iconInfo.hbmColor) DeleteObject(iconInfo.hbmColor);
+                if (iconInfo.hbmMask) DeleteObject(iconInfo.hbmMask);
+                
+                ReleaseDC(nullptr, hdcScreen);
+            }
+            
+            // Destroy the HICON - we don't need it anymore
+            DestroyIcon(icon);
+        }
     }
     
     return true;

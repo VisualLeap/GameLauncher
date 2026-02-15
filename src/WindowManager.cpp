@@ -22,7 +22,6 @@ WindowManager::WindowManager()
     , trayManager(nullptr)
     , shortcutScanner(nullptr)
     , isDragging(false)
-    , dragStartPoint({0, 0})
     , activeTabIndex(0)
     , savedActiveTabIndex(0)
     , scrollOffset(0)
@@ -36,9 +35,17 @@ WindowManager::WindowManager()
     , offscreenDC(nullptr)
     , offscreenBitmap(nullptr)
     , oldBitmap(nullptr)
+    , offscreenBits(nullptr)
     , offscreenWidth(0)
     , offscreenHeight(0)
     , isResizing(false)
+    , tabBufferDC(nullptr)
+    , tabBufferBitmap(nullptr)
+    , oldTabBitmap(nullptr)
+    , tabBufferBits(nullptr)
+    , tabBufferWidth(0)
+    , tabBufferHeight(0)
+    , tabBufferDirty(true)
 {
 }
 
@@ -52,6 +59,17 @@ WindowManager::~WindowManager() {
             DeleteObject(offscreenBitmap);
         }
         DeleteDC(offscreenDC);
+    }
+    
+    // Clean up tab buffer
+    if (tabBufferDC) {
+        if (oldTabBitmap) {
+            SelectObject(tabBufferDC, oldTabBitmap);
+        }
+        if (tabBufferBitmap) {
+            DeleteObject(tabBufferBitmap);
+        }
+        DeleteDC(tabBufferDC);
     }
     
     if (mainWindow) {
@@ -83,8 +101,9 @@ RECT WindowManager::GetOptimizedGridRect(const RECT& gridRect, int cols, int ite
     int startX = gridRect.left + (availableWidth - totalGridWidth) / 2;
     
     RECT optimizedGridRect = gridRect;
-    optimizedGridRect.left = startX - DesignConstants::SELECTION_EFFECT_MARGIN;
-    optimizedGridRect.right = min(gridRect.right, startX + totalGridWidth + DesignConstants::SELECTION_EFFECT_MARGIN);
+    optimizedGridRect.left = startX - DesignConstants::SELECTION_BORDER_EXTENSION;
+    optimizedGridRect.right = min(gridRect.right, startX + totalGridWidth + DesignConstants::SELECTION_BORDER_EXTENSION);
+    optimizedGridRect.top -= DesignConstants::SELECTION_BORDER_EXTENSION;
     
     return optimizedGridRect;
 }
@@ -133,20 +152,50 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
     std::wstring iniPath = GetIniFilePath();
     
     // Read values from INI file
-    int savedX = GetPrivateProfileInt(L"Window", L"X", -1, iniPath.c_str());
-    int savedY = GetPrivateProfileInt(L"Window", L"Y", -1, iniPath.c_str());
+    int savedX = GetPrivateProfileInt(L"Window", L"X", -32768, iniPath.c_str());
+    int savedY = GetPrivateProfileInt(L"Window", L"Y", -32768, iniPath.c_str());
     int savedWidth = GetPrivateProfileInt(L"Window", L"Width", 800, iniPath.c_str());
     int savedHeight = GetPrivateProfileInt(L"Window", L"Height", 600, iniPath.c_str());
     int savedActiveTab = GetPrivateProfileInt(L"Window", L"ActiveTab", 0, iniPath.c_str());
     
-    // Validate the saved position is on screen and values are reasonable
-    if (savedX >= 0 && savedY >= 0 && savedX < screenWidth && savedY < screenHeight && 
-        savedWidth > 200 && savedHeight > 150 && savedWidth <= screenWidth && savedHeight <= screenHeight) {
-        // Use saved position and size
-        x = savedX;
-        y = savedY;
-        windowWidth = savedWidth;
-        windowHeight = savedHeight;
+    // Check if we have valid saved values (not the default sentinel value)
+    bool hasValidSavedPosition = (savedX != -32768 && savedY != -32768);
+    
+    if (hasValidSavedPosition && savedWidth > 200 && savedHeight > 150) {
+        // Get the monitor that contains the saved position
+        POINT savedPos = {savedX + savedWidth / 2, savedY + savedHeight / 2};  // Use center point
+        HMONITOR hMonitor = MonitorFromPoint(savedPos, MONITOR_DEFAULTTOPRIMARY);
+        
+        // Get monitor info to clamp window to monitor bounds
+        MONITORINFO monitorInfo = {};
+        monitorInfo.cbSize = sizeof(MONITORINFO);
+        GetMonitorInfo(hMonitor, &monitorInfo);
+        
+        RECT workArea = monitorInfo.rcWork;  // Work area excludes taskbar
+        int monitorWidth = workArea.right - workArea.left;
+        int monitorHeight = workArea.bottom - workArea.top;
+        
+        // Clamp width and height to monitor size
+        windowWidth = min(savedWidth, monitorWidth);
+        windowHeight = min(savedHeight, monitorHeight);
+        
+        // Allow negative coordinates but ensure at least 100 pixels of the window is visible
+        const int MIN_VISIBLE = 100;
+        x = max(workArea.left - windowWidth + MIN_VISIBLE, min(savedX, workArea.right - MIN_VISIBLE));
+        y = max(workArea.top - windowHeight + MIN_VISIBLE, min(savedY, workArea.bottom - MIN_VISIBLE));
+    } else {
+        // Use default centered position on primary monitor
+        HMONITOR hMonitor = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO monitorInfo = {};
+        monitorInfo.cbSize = sizeof(MONITORINFO);
+        GetMonitorInfo(hMonitor, &monitorInfo);
+        
+        RECT workArea = monitorInfo.rcWork;
+        int monitorWidth = workArea.right - workArea.left;
+        int monitorHeight = workArea.bottom - workArea.top;
+        
+        x = workArea.left + (monitorWidth - windowWidth) / 2;
+        y = workArea.top + (monitorHeight - windowHeight) / 2;
     }
     
     // Store the saved active tab index for later use
@@ -166,8 +215,7 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
         return false;
     }
     
-    // Set window transparency using layered window attributes
-    SetLayeredWindowAttributes(mainWindow, 0, DesignConstants::WINDOW_OPACITY, LWA_ALPHA);
+    // Note: Not using SetLayeredWindowAttributes - we use UpdateLayeredWindow with per-pixel alpha instead
     
     // Use DWM to create thin, modern resizable borders
     MARGINS margins = {1, 1, 1, 1};  // 1 pixel border on all sides
@@ -323,14 +371,18 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             
+            // Get full window size for layered window bitmap
+            RECT windowRect;
+            GetWindowRect(hwnd, &windowRect);
+            int windowWidth = windowRect.right - windowRect.left;
+            int windowHeight = windowRect.bottom - windowRect.top;
+            
+            // Get client area for drawing content
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
             
-            int width = clientRect.right - clientRect.left;
-            int height = clientRect.bottom - clientRect.top;
-            
             // Create or resize offscreen buffer if needed (but not during active resize)
-            if ((!offscreenDC || offscreenWidth != width || offscreenHeight != height) && !isResizing) {
+            if ((!offscreenDC || offscreenWidth != windowWidth || offscreenHeight != windowHeight) && !isResizing) {
                 // Clean up old buffer if it exists
                 if (offscreenDC) {
                     if (oldBitmap) {
@@ -342,28 +394,47 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
                     DeleteDC(offscreenDC);
                 }
                 
-                // Create new buffer
+                // Create 32-bit ARGB DIB section for per-pixel alpha at full window size
+                BITMAPINFO bmi = {};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = windowWidth;
+                bmi.bmiHeader.biHeight = -windowHeight;  // Top-down DIB
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;     // 32-bit ARGB
+                bmi.bmiHeader.biCompression = BI_RGB;
+                
                 offscreenDC = CreateCompatibleDC(hdc);
-                offscreenBitmap = CreateCompatibleBitmap(hdc, width, height);
+                offscreenBitmap = CreateDIBSection(offscreenDC, &bmi, DIB_RGB_COLORS, &offscreenBits, nullptr, 0);
                 oldBitmap = (HBITMAP)SelectObject(offscreenDC, offscreenBitmap);
-                offscreenWidth = width;
-                offscreenHeight = height;
-                OutputDebugString(L"AAAAAAAAAAAAAAAA\n");
+                offscreenWidth = windowWidth;
+                offscreenHeight = windowHeight;
             }
             
-            // Draw everything to the persistent buffer
-            // Draw modern background
-            DrawModernBackground(offscreenDC, clientRect);
+            // Draw everything to the persistent buffer first (GDI doesn't set alpha channel)
+            // Clear entire buffer to nearly transparent (alpha=1 for hit testing, visually transparent)
+            if (offscreenBits) {
+                // Fill with 0x01000000 (alpha=1, RGB=0)
+                // Can't use memset since it fills bytes, not DWORDs
+                DWORD* pixels = (DWORD*)offscreenBits;
+                DWORD fillValue = 0x01000000;
+                int totalPixels = offscreenWidth * offscreenHeight;
+                
+                // Use rep stosd via intrinsic for fast bulk fill
+                __stosd((unsigned long*)pixels, fillValue, totalPixels);
+            }
             
             // Draw tabs if we have any
+            RECT tabRect = {0, 0, 0, 0};
             if (!tabs.empty()) {
                 DrawTabs(offscreenDC, clientRect);
+                tabRect = GetTabBarRect(clientRect);  // Get tab region for alpha fixing
                 
                 // Draw grid in the remaining area
                 RECT gridRect = GetGridRect(clientRect);
                 if (gridRenderer && activeTabIndex >= 0 && activeTabIndex < static_cast<int>(tabs.size())) {
                     // Set up clipping region to prevent icons from drawing over tabs
-                    HRGN clipRegion = CreateRectRgn(gridRect.left, gridRect.top, gridRect.right, gridRect.bottom);
+                    // Extend clip region upward to allow selection border to be visible
+                    HRGN clipRegion = CreateRectRgn(gridRect.left, gridRect.top - DesignConstants::SELECTION_BORDER_EXTENSION, gridRect.right, gridRect.bottom);
                     SelectClipRgn(offscreenDC, clipRegion);
                     
                     gridRenderer->SetShortcuts(&tabs[activeTabIndex].shortcuts);
@@ -393,11 +464,154 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
                 DeleteObject(hFont);
             }
             
-            // Copy the persistent buffer to the screen in one operation (eliminates flicker)
-            BitBlt(hdc, 0, 0, width, height, offscreenDC, 0, 0, SRCCOPY);
+            // Fix alpha channel after GDI drawing (GDI sets alpha to 0, we need proper alpha for visible elements)
+            // CRITICAL: AC_SRC_ALPHA requires premultiplied alpha - RGB must be multiplied by alpha
+            if (offscreenBits && offscreenDC) {
+                DWORD* pixels = (DWORD*)offscreenBits;
+                int bufferWidth = offscreenWidth;
+                int bufferHeight = offscreenHeight;
+                int bgLuminance = (28 + 28 + 30) / 3;
+                
+                int clientWidth = clientRect.right - clientRect.left;
+                int clientHeight = clientRect.bottom - clientRect.top;
+                
+                // 1. Process tab region (simple: all pixels opaque)
+                if (!tabs.empty()) {
+                    int tabTop = max(0, tabRect.top);
+                    int tabBottom = min(clientHeight, min(tabRect.bottom, bufferHeight));
+                    int tabLeft = max(0, tabRect.left);
+                    int tabRight = min(clientWidth, min(tabRect.right, bufferWidth));
+                    
+                    for (int y = tabTop; y < tabBottom; y++) {
+                        int rowOffset = y * bufferWidth;
+                        for (int x = tabLeft; x < tabRight; x++) {
+                            int i = rowOffset + x;
+                            DWORD pixel = pixels[i];
+                            BYTE currentAlpha = (pixel >> 24) & 0xFF;
+                            
+                            if (currentAlpha == 0) {
+                                // Set alpha=255 for all tab pixels
+                                pixels[i] = (255 << 24) | (pixel & 0x00FFFFFF);
+                            }
+                        }
+                    }
+                }
+                
+                // 2. Process icon label regions (text, shadows, borders)
+                if (gridRenderer && activeTabIndex >= 0 && activeTabIndex < static_cast<int>(tabs.size())) {
+                    RECT gridRect = GetGridRect(clientRect);
+                    
+                    for (size_t iconIdx = 0; iconIdx < tabs[activeTabIndex].shortcuts.size(); iconIdx++) {
+                        RECT iconBounds = gridRenderer->GetIconBounds(static_cast<int>(iconIdx), gridRect);
+                        
+                        int labelTop = max(0, min(iconBounds.top, clientHeight));
+                        int labelBottom = max(0, min(iconBounds.bottom, clientHeight));
+                        int labelLeft = max(0, min(iconBounds.left, clientWidth));
+                        int labelRight = max(0, min(iconBounds.right, clientWidth));
+                        
+                        if (labelTop >= labelBottom || labelLeft >= labelRight) continue;
+                        
+                        for (int y = labelTop; y < labelBottom && y < bufferHeight; y++) {
+                            int rowOffset = y * bufferWidth;
+                            for (int x = labelLeft; x < labelRight && x < bufferWidth; x++) {
+                                int i = rowOffset + x;
+                                DWORD pixel = pixels[i];
+                                BYTE currentAlpha = (pixel >> 24) & 0xFF;
+                                
+                                // Skip pixels with alpha already set (icons from AlphaBlend)
+                                if (currentAlpha > 0) continue;
+                                
+                                BYTE r = (pixel >> 16) & 0xFF;
+                                BYTE g = (pixel >> 8) & 0xFF;
+                                BYTE b = pixel & 0xFF;
+                                
+                                // Check for selection border pixels (grey or white)
+                                bool isGreyBorder = (r > 50 && r < 80 && g > 50 && g < 80 && b > 50 && b < 80);
+                                bool isWhiteBorder = (r > 250 && g > 250 && b > 250);
+                                if (isGreyBorder || isWhiteBorder) {
+                                    pixels[i] = (255 << 24) | (r << 16) | (g << 8) | b;
+                                    continue;
+                                }
+                                
+                                // Skip pure black (undrawn background)
+                                if (r == 0 && g == 0 && b == 0) continue;
+                                
+                                // Process text and shadow pixels
+                                int luminance = (r + g + b) / 3;
+                                bool isWhiteText = luminance > bgLuminance + 50;
+                                bool isBlackShadow = luminance < 30;
+                                
+                                if (isWhiteText || isBlackShadow) {
+                                    BYTE textAlpha;
+                                    if (isBlackShadow) {
+                                        textAlpha = (BYTE)min(255, (bgLuminance - luminance) * 255 / bgLuminance);
+                                    } else {
+                                        textAlpha = (BYTE)min(255, (luminance - bgLuminance) * 255 / (255 - bgLuminance));
+                                    }
+                                    
+                                    // Premultiply RGB by alpha
+                                    r = (r * textAlpha) / 255;
+                                    g = (g * textAlpha) / 255;
+                                    b = (b * textAlpha) / 255;
+                                    pixels[i] = (textAlpha << 24) | (r << 16) | (g << 8) | b;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Note: No need to clear margins or process background - everything defaults to transparent
+                
+                // Use UpdateLayeredWindow for per-pixel alpha compositing
+                POINT ptSrc = {0, 0};
+                SIZE sizeWnd = {offscreenWidth, offscreenHeight};
+                BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+                
+                UpdateLayeredWindow(hwnd, hdc, nullptr, &sizeWnd, offscreenDC, &ptSrc, 0, &blend, ULW_ALPHA);
+            }
             
             EndPaint(hwnd, &ps);
             return 0;
+        }
+        case WM_NCHITTEST: {
+            // Handle hit testing for resize borders (transparent pixels block default hit testing)
+            // Get mouse position in screen coordinates (lParam contains signed screen coords)
+            POINT pt;
+            pt.x = (short)LOWORD(lParam);  // Cast to short for signed values
+            pt.y = (short)HIWORD(lParam);
+            
+            // Convert to client coordinates
+            POINT clientPt = pt;
+            ScreenToClient(hwnd, &clientPt);
+            
+            RECT clientRect;
+            GetClientRect(hwnd, &clientRect);
+            
+            const int BORDER_WIDTH = 16;  // Wider resize border for easier targeting
+            
+            // Check if mouse is within the window bounds (including border area)
+            if (clientPt.x >= -BORDER_WIDTH && clientPt.x < clientRect.right + BORDER_WIDTH &&
+                clientPt.y >= -BORDER_WIDTH && clientPt.y < clientRect.bottom + BORDER_WIDTH) {
+                
+                // Check if in resize border regions
+                bool inLeft = clientPt.x < BORDER_WIDTH;
+                bool inRight = clientPt.x >= clientRect.right - BORDER_WIDTH;
+                bool inTop = clientPt.y < BORDER_WIDTH;
+                bool inBottom = clientPt.y >= clientRect.bottom - BORDER_WIDTH;
+                
+                // Return appropriate hit test code for resize
+                if (inLeft && inTop) return HTTOPLEFT;
+                if (inRight && inTop) return HTTOPRIGHT;
+                if (inLeft && inBottom) return HTBOTTOMLEFT;
+                if (inRight && inBottom) return HTBOTTOMRIGHT;
+                if (inLeft) return HTLEFT;
+                if (inRight) return HTRIGHT;
+                if (inTop) return HTTOP;
+                if (inBottom) return HTBOTTOM;
+            }
+            
+            // Fall back to default behavior
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
         }
         
         case WM_LBUTTONDOWN:
@@ -442,19 +656,24 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
         case WM_EXITSIZEMOVE:
             // User finished resizing or moving the window
             isResizing = false;
+            // Save window state now that resize/move is complete
+            SaveWindowState();
             // Force buffer recreation on next paint
             InvalidateRect(mainWindow, nullptr, FALSE);
             return 0;
             
         case WM_SIZE:
         case WM_MOVE:
-            // Save window state when moved or resized
-            SaveWindowState();
+            // Don't save during active resize - wait for WM_EXITSIZEMOVE
+            if (!isResizing) {
+                SaveWindowState();
+            }
             if (uMsg == WM_SIZE) {
                 // Reset scroll position and selection on window resize to keep things simple
                 scrollOffset = 0;
                 selectedIconIndex = -1;
                 usingKeyboardNavigation = false;
+                tabBufferDirty = true; // Mark tab buffer for redraw on resize
                 
                 // Invalidate to redraw grid with new size
                 InvalidateRect(mainWindow, nullptr, TRUE);
@@ -477,6 +696,8 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             return 0;
             
         case WM_DESTROY:
+            // Save window state before destroying
+            SaveWindowState();
             PostQuitMessage(0);
             return 0;
             
@@ -568,51 +789,6 @@ void WindowManager::HandleWindowDrag(UINT message, WPARAM /*wParam*/, LPARAM /*l
     }
 }
 
-void WindowManager::DrawGradientBackground(HDC hdc, const RECT& rect) {
-
-    // Use Windows' built-in GradientFill for smooth, anti-aliased gradients
-    TRIVERTEX vertex[2];
-    GRADIENT_RECT gRect;
-    
-    // Define gradient colors (slightly lighter at top, darker at bottom)
-    COLORREF topColor = RGB(20, 20, 25);        // Slightly lighter at top
-    COLORREF bottomColor = RGB(160, 172, 156);  // Darker at bottom
-    
-    // Set up the gradient vertices
-    vertex[0].x = rect.left;
-    vertex[0].y = rect.top;
-    vertex[0].Red = GetRValue(topColor) << 8;    // GradientFill uses 16-bit color values
-    vertex[0].Green = GetGValue(topColor) << 8;
-    vertex[0].Blue = GetBValue(topColor) << 8;
-    vertex[0].Alpha = 0x0000;
-    
-    vertex[1].x = rect.right;
-    vertex[1].y = rect.bottom;
-    vertex[1].Red = GetRValue(bottomColor) << 8;
-    vertex[1].Green = GetGValue(bottomColor) << 8;
-    vertex[1].Blue = GetBValue(bottomColor) << 8;
-    vertex[1].Alpha = 0x0000;
-    
-    gRect.UpperLeft = 0;
-    gRect.LowerRight = 1;
-    
-    // Draw the gradient (GRADIENT_FILL_RECT_V for vertical gradient)
-    GradientFill(hdc, vertex, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
-}
-
-void WindowManager::DrawModernBackground(HDC hdc, const RECT& rect) {
-    
-    // Simple solid background for layered window
-    HBRUSH baseBrush = CreateSolidBrush(DesignConstants::BACKGROUND_COLOR);
-    FillRect(hdc, &rect, baseBrush);
-    DeleteObject(baseBrush);
-    
-    // Add a subtle gradient for depth
-    DrawGradientBackground(hdc, rect);
-    
-    // Note: Border drawing removed for cleaner appearance
-}
-
 void WindowManager::LoadShortcuts() {
     if (!shortcutScanner) {
         return;
@@ -620,6 +796,7 @@ void WindowManager::LoadShortcuts() {
     
     // Scan for tabs
     tabs = shortcutScanner->ScanTabs();
+    tabBufferDirty = true; // Mark tab buffer for redraw since tabs changed
     
     // Set active tab to saved tab if valid, otherwise first tab
     // Only do this during initial load (when activeTabIndex is 0 and tabs were empty)
@@ -1085,6 +1262,7 @@ void WindowManager::SetActiveTab(int tabIndex) {
     }
     
     activeTabIndex = tabIndex;
+    tabBufferDirty = true; // Mark tab buffer for redraw
     
     // Reset scroll offset when switching tabs
     scrollOffset = 0;
@@ -1112,119 +1290,118 @@ void WindowManager::DrawTabs(HDC hdc, const RECT& clientRect) {
     if (tabs.empty()) return;
 
     RECT tabBarRect = GetTabBarRect(clientRect);
-    
-    // Create memory DC for proper alpha blending with DWM
-    HDC memDC = CreateCompatibleDC(hdc);
-    if (!memDC) {
-        return;
-    }
-    
     int width = tabBarRect.right - tabBarRect.left;
     int height = tabBarRect.bottom - tabBarRect.top;
     
-    // Create 32-bit bitmap for proper alpha
-    BITMAPINFO bmi = {0};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-    
-    void* pBits = nullptr;
-    HBITMAP hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
-    
-    if (!hBitmap) {
-        DeleteDC(memDC);
-        return;
-    }
-    
-    HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, hBitmap);
-    
-    // Fill with opaque tab bar background
-    DWORD* pixels = (DWORD*)pBits;
-    DWORD tabBarColor = 0xFF2D2D32; // Opaque dark gray (ARGB format)
-    
-    for (int i = 0; i < width * height; i++) {
-        pixels[i] = tabBarColor;
-    }
-    
-    // Set up text rendering on memory DC
-    SetTextColor(memDC, RGB(255, 255, 255));
-    SetBkMode(memDC, TRANSPARENT);
-    
-    HFONT hFont = CreateFont(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    HFONT hOldFont = (HFONT)SelectObject(memDC, hFont);
-    
-    int tabWidth = width / static_cast<int>(tabs.size());
-    
-    for (size_t i = 0; i < tabs.size(); ++i) {
-        RECT tabRect;
-        tabRect.left = static_cast<int>(i) * tabWidth;
-        tabRect.right = tabRect.left + tabWidth;
-        tabRect.top = 0;
-        tabRect.bottom = height;
-        
-        // Ensure the last tab extends to the full width
-        if (i == tabs.size() - 1) {
-            tabRect.right = width;
+    // Create or resize tab buffer if needed
+    if (!tabBufferDC || tabBufferWidth != width || tabBufferHeight != height) {
+        // Clean up old buffer
+        if (tabBufferDC) {
+            if (oldTabBitmap) {
+                SelectObject(tabBufferDC, oldTabBitmap);
+            }
+            if (tabBufferBitmap) {
+                DeleteObject(tabBufferBitmap);
+            }
+            DeleteDC(tabBufferDC);
         }
         
-        // Draw tab background with opaque colors using per-tab customizable colors
-        bool isActiveTab = (static_cast<int>(i) == activeTabIndex);
-        COLORREF baseColor = GetTabColor(tabs[i].name, isActiveTab);
-        DWORD tabColor = 0xFF000000 | // Full opacity
-                        (GetRValue(baseColor) << 16) | 
-                        (GetGValue(baseColor) << 8) | 
-                        GetBValue(baseColor);
+        // Create new buffer
+        BITMAPINFO bmi = {0};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
         
-        // Fill tab area with solid color
-        for (int y = tabRect.top; y < tabRect.bottom; y++) {
-            for (int x = tabRect.left; x < tabRect.right; x++) {
-                if (x >= 0 && x < width && y >= 0 && y < height) {
-                    pixels[y * width + x] = tabColor;
+        tabBufferDC = CreateCompatibleDC(hdc);
+        tabBufferBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &tabBufferBits, nullptr, 0);
+        oldTabBitmap = (HBITMAP)SelectObject(tabBufferDC, tabBufferBitmap);
+        tabBufferWidth = width;
+        tabBufferHeight = height;
+        tabBufferDirty = true;
+    }
+    
+    // Render tabs to buffer if dirty
+    if (tabBufferDirty) {
+        DWORD* pixels = (DWORD*)tabBufferBits;
+        DWORD tabBarColor = 0xFF2D2D32;
+        
+        // Fill background
+        for (int i = 0; i < width * height; i++) {
+            pixels[i] = tabBarColor;
+        }
+        
+        // Set up text rendering
+        SetTextColor(tabBufferDC, RGB(255, 255, 255));
+        SetBkMode(tabBufferDC, TRANSPARENT);
+        
+        HFONT hFont = CreateFont(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hOldFont = (HFONT)SelectObject(tabBufferDC, hFont);
+        
+        int tabWidth = width / static_cast<int>(tabs.size());
+        
+        for (size_t i = 0; i < tabs.size(); ++i) {
+            RECT tabRect;
+            tabRect.left = static_cast<int>(i) * tabWidth;
+            tabRect.right = tabRect.left + tabWidth;
+            tabRect.top = 0;
+            tabRect.bottom = height;
+            
+            if (i == tabs.size() - 1) {
+                tabRect.right = width;
+            }
+            
+            // Draw tab background
+            bool isActiveTab = (static_cast<int>(i) == activeTabIndex);
+            COLORREF baseColor = GetTabColor(tabs[i].name, isActiveTab);
+            DWORD tabColor = 0xFF000000 | (GetRValue(baseColor) << 16) | 
+                            (GetGValue(baseColor) << 8) | GetBValue(baseColor);
+            
+            for (int y = tabRect.top; y < tabRect.bottom; y++) {
+                for (int x = tabRect.left; x < tabRect.right; x++) {
+                    if (x >= 0 && x < width && y >= 0 && y < height) {
+                        pixels[y * width + x] = tabColor;
+                    }
                 }
             }
+            
+            // Draw tab border
+            HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(100, 100, 107));
+            HPEN oldPen = (HPEN)SelectObject(tabBufferDC, borderPen);
+            
+            MoveToEx(tabBufferDC, tabRect.left, tabRect.top, nullptr);
+            LineTo(tabBufferDC, tabRect.right, tabRect.top);
+            LineTo(tabBufferDC, tabRect.right, tabRect.bottom);
+            LineTo(tabBufferDC, tabRect.left, tabRect.bottom);
+            LineTo(tabBufferDC, tabRect.left, tabRect.top);
+            
+            SelectObject(tabBufferDC, oldPen);
+            DeleteObject(borderPen);
+            
+            // Draw tab text
+            RECT textRect = tabRect;
+            textRect.left += 8;
+            textRect.right -= 8;
+            textRect.top += 4;
+            textRect.bottom -= 4;
+            
+            DrawText(tabBufferDC, tabs[i].name.c_str(), -1, &textRect, 
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
         
-        // Draw tab border
-        HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(100, 100, 107));
-        HPEN oldPen = (HPEN)SelectObject(memDC, borderPen);
+        SelectObject(tabBufferDC, hOldFont);
+        DeleteObject(hFont);
         
-        // Draw border around the tab
-        MoveToEx(memDC, tabRect.left, tabRect.top, nullptr);
-        LineTo(memDC, tabRect.right, tabRect.top);
-        LineTo(memDC, tabRect.right, tabRect.bottom);
-        LineTo(memDC, tabRect.left, tabRect.bottom);
-        LineTo(memDC, tabRect.left, tabRect.top);
-        
-        SelectObject(memDC, oldPen);
-        DeleteObject(borderPen);
-        
-        // Draw tab text
-        RECT textRect = tabRect;
-        textRect.left += 8;   // Left padding
-        textRect.right -= 8;  // Right padding
-        textRect.top += 4;    // Top padding
-        textRect.bottom -= 4; // Bottom padding
-        
-        DrawText(memDC, tabs[i].name.c_str(), -1, &textRect, 
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        tabBufferDirty = false;
     }
     
-    SelectObject(memDC, hOldFont);
-    DeleteObject(hFont);
-    
-    // Use BitBlt instead of AlphaBlend since tabs are fully opaque
+    // BitBlt cached buffer to main buffer
     BitBlt(hdc, tabBarRect.left, tabBarRect.top, width, height,
-           memDC, 0, 0, SRCCOPY);
-    
-    // Cleanup
-    SelectObject(memDC, oldBitmap);
-    DeleteObject(hBitmap);
-    DeleteDC(memDC);
+           tabBufferDC, 0, 0, SRCCOPY);
 }
 
 RECT WindowManager::GetTabBarRect(const RECT& clientRect) {
@@ -1315,6 +1492,11 @@ void WindowManager::SetSelectedIcon(int iconIndex, bool fromKeyboard) {
         EnsureSelectedIconVisible();
     }
     
+    // Sync grid renderer scroll offset before computing icon bounds
+    if (gridRenderer) {
+        gridRenderer->SetScrollOffset(scrollOffset);
+    }
+    
     // Invalidate the old and new selected icons for redraw
     RECT clientRect;
     GetClientRect(mainWindow, &clientRect);
@@ -1381,7 +1563,8 @@ void WindowManager::EnsureSelectedIconVisible() {
     int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
     int itemHeight = totalItemHeight + DesignConstants::ICON_PADDING;
     
-    int iconTop = row * itemHeight - scrollOffset;
+    // Account for the startY padding in GridRenderer (SELECTION_BORDER_PADDING)
+    int iconTop = DesignConstants::SELECTION_BORDER_PADDING + row * itemHeight - scrollOffset;
     int iconBottom = iconTop + totalItemHeight;
     
     int viewportTop = 0;
@@ -1391,13 +1574,13 @@ void WindowManager::EnsureSelectedIconVisible() {
     RECT optimizedGridRect = GetOptimizedGridRect(gridRect, cols, itemWidth, availableWidth);
     
     // Check if icon is above the viewport
-    if (iconTop < viewportTop) {
-        scrollOffset = row * itemHeight;
+    if (iconTop - DesignConstants::SELECTION_BORDER_EXTENSION < viewportTop) {
+        scrollOffset = max(0, DesignConstants::SELECTION_BORDER_PADDING + row * itemHeight - DesignConstants::SELECTION_BORDER_EXTENSION);
         InvalidateRect(mainWindow, &optimizedGridRect, FALSE);
     }
     // Check if icon is below the viewport
     else if (iconBottom > viewportBottom) {
-        scrollOffset = (row * itemHeight) - viewportBottom + totalItemHeight;
+        scrollOffset = DesignConstants::SELECTION_BORDER_PADDING + (row * itemHeight) - viewportBottom + totalItemHeight;
         
         // Ensure we don't scroll past the maximum
         int totalRows = (static_cast<int>(tabs[activeTabIndex].shortcuts.size()) + cols - 1) / cols;
