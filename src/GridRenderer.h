@@ -14,6 +14,11 @@ public:
     void SetScrollOffset(int offset) { scrollOffset = offset; }
     void SetSelectedIcon(int index) { selectedIconIndex = index; }
     void SetDpiScaleFactor(float scaleFactor) { dpiScaleFactor = scaleFactor; }
+    void SetIconScale(float scale) { iconScale = scale; }
+    void SetIconLabelFontSize(int fontSize) { iconLabelFontSize = fontSize; }
+    void SetIconSpacingHorizontal(int spacing) { iconSpacingHorizontal = spacing; }
+    void SetIconSpacingVertical(int spacing) { iconSpacingVertical = spacing; }
+    void SetIconVerticalPadding(int padding) { iconVerticalPadding = padding; }
     void Render(HDC hdc, const RECT& clientRect);
     int GetClickedShortcut(POINT clickPoint, const RECT& clientRect);
     
@@ -25,6 +30,11 @@ private:
     int selectedIconIndex;
     int scrollOffset; // Vertical scroll offset in pixels
     float dpiScaleFactor; // DPI scaling factor for this window
+    float iconScale; // Icon scale factor (0.25 to 2.0)
+    int iconLabelFontSize; // Icon label font size (configurable)
+    int iconSpacingHorizontal; // Horizontal spacing between icons
+    int iconSpacingVertical; // Vertical spacing between icons
+    int iconVerticalPadding; // Vertical padding for icon labels
     
     // Cached GDI objects for performance
     HFONT cachedFont;
@@ -43,9 +53,8 @@ private:
     // Helper functions
     void DrawRect(HDC hdc, const RECT& rect, COLORREF color);
     
-    // Constants from design - now DPI-aware
-    int GetPhysicalIconSize() const { return DesignConstants::TARGET_ICON_SIZE_PIXELS; }
-    static const int ICON_PADDING = DesignConstants::ICON_PADDING;
+    // Constants from design - now DPI-aware and scale-aware
+    int GetPhysicalIconSize() const { return static_cast<int>(DesignConstants::TARGET_ICON_SIZE_PIXELS * iconScale); }
     static const int GRID_MARGIN = DesignConstants::GRID_MARGIN;
-    int GetTotalItemHeight() const { return GetPhysicalIconSize() + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING; }
+    int GetTotalItemHeight() const { return GetPhysicalIconSize() + DesignConstants::LABEL_HEIGHT + iconVerticalPadding; }
 };

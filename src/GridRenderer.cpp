@@ -11,14 +11,16 @@ GridRenderer::GridRenderer()
     , selectedIconIndex(-1)
     , scrollOffset(0)
     , dpiScaleFactor(1.0f)
+    , iconScale(1.0f)
+    , iconLabelFontSize(36)
+    , iconSpacingHorizontal(12)
+    , iconSpacingVertical(12)
+    , iconVerticalPadding(4)
     , cachedFont(nullptr)
     , cachedSelectionPen(nullptr)
     , cachedShadowPen(nullptr)
 {
-    // Create cached font
-    cachedFont = CreateFont(36, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    // Font will be created dynamically based on iconLabelFontSize
     
     // Create cached pens for selection borders
     cachedSelectionPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(255, 255, 255));
@@ -46,7 +48,12 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
 
     // Set up text rendering
     SetBkMode(hdc, TRANSPARENT);
-    HFONT hOldFont = (HFONT)SelectObject(hdc, cachedFont);
+    
+    // Create font dynamically based on iconLabelFontSize
+    HFONT hFont = CreateFont(iconLabelFontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
     
     if (!shortcuts || shortcuts->empty()) {
         // Draw "No shortcuts found" message
@@ -128,6 +135,7 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
     
     // Cleanup
     SelectObject(hdc, hOldFont);
+    DeleteObject(hFont);
 }
 
 int GridRenderer::GetClickedShortcut(POINT clickPoint, const RECT& clientRect) {
@@ -163,7 +171,7 @@ RECT GridRenderer::GetIconBounds(int index, const RECT& clientRect) {
     RECT iconRect = GetIconRect(index, cols, startX, startY);
     
     // Expand to include label area and some padding for hover effects
-    iconRect.bottom += DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING + DesignConstants::SELECTION_BORDER_PADDING;
+    iconRect.bottom += DesignConstants::LABEL_HEIGHT + iconVerticalPadding + DesignConstants::SELECTION_BORDER_PADDING;
     iconRect.left -= DesignConstants::SELECTION_BORDER_PADDING;
     iconRect.right += DesignConstants::SELECTION_BORDER_PADDING;
     iconRect.top -= DesignConstants::SELECTION_BORDER_PADDING;
@@ -182,7 +190,7 @@ void GridRenderer::CalculateGridLayout(const RECT& rect, int& cols, int& rows, i
     
     // Calculate columns based on available width using DPI-aware icon size
     int physicalIconSize = GetPhysicalIconSize();
-    int itemWidth = physicalIconSize + ICON_PADDING;
+    int itemWidth = physicalIconSize + iconSpacingHorizontal;
     cols = (availableWidth / itemWidth > 1) ? (availableWidth / itemWidth) : 1;
     
     // Calculate rows needed
@@ -190,7 +198,7 @@ void GridRenderer::CalculateGridLayout(const RECT& rect, int& cols, int& rows, i
     rows = (shortcutCount + cols - 1) / cols; // Ceiling division
     
     // Center the grid horizontally within the provided rect
-    int totalGridWidth = cols * itemWidth - ICON_PADDING;
+    int totalGridWidth = cols * itemWidth - iconSpacingHorizontal;
     startX = rect.left + (availableWidth - totalGridWidth) / 2;
     
     // Start from top of the rect with small padding to prevent selection border clipping
@@ -202,8 +210,8 @@ RECT GridRenderer::GetIconRect(int index, int cols, int startX, int startY) {
     int col = index % cols;
     
     int physicalIconSize = GetPhysicalIconSize();
-    int itemWidth = physicalIconSize + ICON_PADDING;
-    int itemHeight = GetTotalItemHeight() + ICON_PADDING;
+    int itemWidth = physicalIconSize + iconSpacingHorizontal;
+    int itemHeight = GetTotalItemHeight() + iconSpacingVertical;
     
     RECT iconRect;
     iconRect.left = startX + col * itemWidth;
@@ -234,13 +242,14 @@ void GridRenderer::DrawIconWithModernEffects(HDC hdc, HBITMAP iconBitmap, int bi
         DeleteObject(hoverBrush);
     }
     
-    // Draw the icon using cached bitmap with AlphaBlend for proper alpha compositing
+    // Draw the icon using pre-scaled bitmap with AlphaBlend for alpha compositing
+    // Note: Icon is already scaled to physicalIconSize during load, so no scaling needed
     int physicalIconSize = GetPhysicalIconSize();
     
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, iconBitmap);
     
-    // Use AlphaBlend to properly composite icon with alpha channel
+    // Use AlphaBlend for proper alpha compositing (no scaling - 1:1 copy)
     BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
     AlphaBlend(hdc, iconRect.left, iconRect.top, physicalIconSize, physicalIconSize,
               hdcMem, 0, 0, bitmapWidth, bitmapHeight, blend);

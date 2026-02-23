@@ -5,6 +5,7 @@
 #include "ShortcutScanner.h"
 #include "ControllerManager.h"
 #include "DataModels.h"
+#include "Settings.h"
 #include "resources/resource.h"
 #include <dwmapi.h>
 #include <algorithm>
@@ -28,10 +29,6 @@ WindowManager::WindowManager()
     , selectedIconIndex(-1)
     , lastSelectedIconIndex(-1)
     , usingKeyboardNavigation(false)
-    , tabActiveColor(RGB(19, 147, 98))      // Default green (0x139362)
-    , tabInactiveColor(RGB(70, 70, 77))     // Default gray
-    , mouseScrollSpeed(60)                  // Default mouse scroll speed (pixels per notch)
-    , joystickScrollSpeed(120)              // Default joystick scroll speed multiplier
     , offscreenDC(nullptr)
     , offscreenBitmap(nullptr)
     , oldBitmap(nullptr)
@@ -87,17 +84,22 @@ std::wstring WindowManager::GetIniFilePath() const {
     return std::wstring(currentDir) + L"\\launcher.ini";
 }
 
+// Helper method to get scaled icon size
+int WindowManager::GetScaledIconSize() const {
+    return static_cast<int>(DesignConstants::TARGET_ICON_SIZE_PIXELS * Settings::Instance().GetIconScale());
+}
+
 // Helper method to calculate grid columns
 int WindowManager::CalculateGridColumns(const RECT& gridRect) const {
     int availableWidth = gridRect.right - gridRect.left;
-    int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-    int itemWidth = physicalIconSize + DesignConstants::ICON_PADDING;
+    int physicalIconSize = GetScaledIconSize();
+    int itemWidth = physicalIconSize + Settings::Instance().GetIconSpacingHorizontal();
     return (availableWidth / itemWidth > 1) ? (availableWidth / itemWidth) : 1;
 }
 
 // Helper method to get optimized grid rect for repainting
 RECT WindowManager::GetOptimizedGridRect(const RECT& gridRect, int cols, int itemWidth, int availableWidth) const {
-    int totalGridWidth = cols * itemWidth - DesignConstants::ICON_PADDING;
+    int totalGridWidth = cols * itemWidth - Settings::Instance().GetIconSpacingHorizontal();
     int startX = gridRect.left + (availableWidth - totalGridWidth) / 2;
     
     RECT optimizedGridRect = gridRect;
@@ -148,15 +150,12 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
     int x = (screenWidth - windowWidth) / 2;
     int y = (screenHeight - windowHeight) / 2;
     
-    // Try to load saved window state
-    std::wstring iniPath = GetIniFilePath();
-    
-    // Read values from INI file
-    int savedX = GetPrivateProfileInt(L"Window", L"X", -32768, iniPath.c_str());
-    int savedY = GetPrivateProfileInt(L"Window", L"Y", -32768, iniPath.c_str());
-    int savedWidth = GetPrivateProfileInt(L"Window", L"Width", 800, iniPath.c_str());
-    int savedHeight = GetPrivateProfileInt(L"Window", L"Height", 600, iniPath.c_str());
-    int savedActiveTab = GetPrivateProfileInt(L"Window", L"ActiveTab", 0, iniPath.c_str());
+    // Try to load saved window state from Settings
+    Settings& settings = Settings::Instance();
+    int savedX = settings.GetWindowX();
+    int savedY = settings.GetWindowY();
+    int savedWidth = settings.GetWindowWidth();
+    int savedHeight = settings.GetWindowHeight();
     
     // Check if we have valid saved values (not the default sentinel value)
     bool hasValidSavedPosition = (savedX != -32768 && savedY != -32768);
@@ -199,7 +198,7 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
     }
     
     // Store the saved active tab index for later use
-    savedActiveTabIndex = savedActiveTab;
+    savedActiveTabIndex = settings.GetActiveTab();
     
     // Create borderless but resizable window with layered style for transparency
     mainWindow = CreateWindowEx(
@@ -440,7 +439,12 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
                     gridRenderer->SetShortcuts(&tabs[activeTabIndex].shortcuts);
                     gridRenderer->SetScrollOffset(scrollOffset);
                     gridRenderer->SetSelectedIcon(selectedIconIndex);
-                    gridRenderer->SetDpiScaleFactor(GetDpiScaleFactor()); // Set DPI scale factor
+                    gridRenderer->SetDpiScaleFactor(GetDpiScaleFactor());
+                    gridRenderer->SetIconScale(Settings::Instance().GetIconScale());
+                    gridRenderer->SetIconLabelFontSize(Settings::Instance().GetIconLabelFontSize());
+                    gridRenderer->SetIconSpacingHorizontal(Settings::Instance().GetIconSpacingHorizontal());
+                    gridRenderer->SetIconSpacingVertical(Settings::Instance().GetIconSpacingVertical());
+                    gridRenderer->SetIconVerticalPadding(Settings::Instance().GetIconVerticalPadding());
                     gridRenderer->Render(offscreenDC, gridRect);
                     
                     // Restore clipping region
@@ -566,7 +570,6 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
                 POINT ptSrc = {0, 0};
                 SIZE sizeWnd = {offscreenWidth, offscreenHeight};
                 BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-                
                 UpdateLayeredWindow(hwnd, hdc, nullptr, &sizeWnd, offscreenDC, &ptSrc, 0, &blend, ULW_ALPHA);
             }
             
@@ -905,7 +908,7 @@ void WindowManager::HandleMouseWheel(int delta) {
     }
     
     // Calculate scroll amount (negative delta means scroll down)
-    int scrollDelta = -delta / WHEEL_DELTA * mouseScrollSpeed;
+    int scrollDelta = -delta / WHEEL_DELTA * Settings::Instance().GetMouseScrollSpeed();
     
     // Get grid area to calculate maximum scroll
     RECT clientRect;
@@ -913,8 +916,8 @@ void WindowManager::HandleMouseWheel(int delta) {
     RECT gridRect = GetGridRect(clientRect);
     
     int availableWidth = gridRect.right - gridRect.left;
-    int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-    int itemWidth = physicalIconSize + DesignConstants::ICON_PADDING;
+    int physicalIconSize = GetScaledIconSize();
+    int itemWidth = physicalIconSize + Settings::Instance().GetIconSpacingHorizontal();
     int cols = CalculateGridColumns(gridRect);
     
     // Calculate new scroll offset with bounds checking
@@ -922,8 +925,8 @@ void WindowManager::HandleMouseWheel(int delta) {
     
     // Only calculate max scroll if we need to clamp
     int rows = (static_cast<int>(tabs[activeTabIndex].shortcuts.size()) + cols - 1) / cols;
-    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
-    int totalContentHeight = rows * (totalItemHeight + DesignConstants::ICON_PADDING);
+    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + Settings::Instance().GetIconVerticalPadding();
+    int totalContentHeight = rows * (totalItemHeight + Settings::Instance().GetIconSpacingVertical());
     int availableHeight = gridRect.bottom - gridRect.top;
     int maxScroll = max(0, totalContentHeight - availableHeight);
     
@@ -935,7 +938,7 @@ void WindowManager::HandleMouseWheel(int delta) {
         
         // Always update selection to first FULLY visible icon after scrolling
         // Calculate which row is at the top of the visible area
-        int rowHeight = totalItemHeight + DesignConstants::ICON_PADDING;
+        int rowHeight = totalItemHeight + Settings::Instance().GetIconSpacingVertical();
         
         // If a row is partially cut off at the top, we want the next row
         // So we add (rowHeight - 1) before dividing to round up
@@ -972,8 +975,8 @@ void WindowManager::HandleJoystickScroll(int delta) {
     RECT gridRect = GetGridRect(clientRect);
     
     int availableWidth = gridRect.right - gridRect.left;
-    int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-    int itemWidth = physicalIconSize + DesignConstants::ICON_PADDING;
+    int physicalIconSize = GetScaledIconSize();
+    int itemWidth = physicalIconSize + Settings::Instance().GetIconSpacingHorizontal();
     int cols = CalculateGridColumns(gridRect);
     
     // Calculate new scroll offset with bounds checking
@@ -981,8 +984,8 @@ void WindowManager::HandleJoystickScroll(int delta) {
     
     // Only calculate max scroll if we need to clamp
     int rows = (static_cast<int>(tabs[activeTabIndex].shortcuts.size()) + cols - 1) / cols;
-    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
-    int totalContentHeight = rows * (totalItemHeight + DesignConstants::ICON_PADDING);
+    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + Settings::Instance().GetIconVerticalPadding();
+    int totalContentHeight = rows * (totalItemHeight + Settings::Instance().GetIconSpacingVertical());
     int availableHeight = gridRect.bottom - gridRect.top;
     int maxScroll = max(0, totalContentHeight - availableHeight);
     
@@ -994,7 +997,7 @@ void WindowManager::HandleJoystickScroll(int delta) {
         
         // Always update selection to first FULLY visible icon after scrolling
         // Calculate which row is at the top of the visible area
-        int rowHeight = totalItemHeight + DesignConstants::ICON_PADDING;
+        int rowHeight = totalItemHeight + Settings::Instance().GetIconSpacingVertical();
         
         // If a row is partially cut off at the top, we want the next row
         // So we add (rowHeight - 1) before dividing to round up
@@ -1046,9 +1049,9 @@ void WindowManager::HandleKeyDown(WPARAM wParam) {
             RECT gridRect = GetGridRect(clientRect);
             int cols = CalculateGridColumns(gridRect);
             
-            int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-            int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
-            int rowHeight = totalItemHeight + DesignConstants::ICON_PADDING;
+            int physicalIconSize = GetScaledIconSize();
+            int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + Settings::Instance().GetIconVerticalPadding();
+            int rowHeight = totalItemHeight + Settings::Instance().GetIconSpacingVertical();
             
             // Calculate first fully visible row
             int firstFullyVisibleRow = (scrollOffset + rowHeight - 1) / rowHeight;
@@ -1127,115 +1130,19 @@ void WindowManager::SaveWindowState() {
     RECT rect;
     GetWindowRect(mainWindow, &rect);
     
-    std::wstring iniPath = GetIniFilePath();
-    
-    // Convert values to strings
-    std::wstring x = std::to_wstring(rect.left);
-    std::wstring y = std::to_wstring(rect.top);
-    std::wstring width = std::to_wstring(rect.right - rect.left);
-    std::wstring height = std::to_wstring(rect.bottom - rect.top);
-    std::wstring activeTab = std::to_wstring(activeTabIndex);
-    
-    // Write to INI file
-    WritePrivateProfileString(L"Window", L"X", x.c_str(), iniPath.c_str());
-    WritePrivateProfileString(L"Window", L"Y", y.c_str(), iniPath.c_str());
-    WritePrivateProfileString(L"Window", L"Width", width.c_str(), iniPath.c_str());
-    WritePrivateProfileString(L"Window", L"Height", height.c_str(), iniPath.c_str());
-    WritePrivateProfileString(L"Window", L"ActiveTab", activeTab.c_str(), iniPath.c_str());
-    
-    // Save tab colors as hex values
-    // Convert COLORREF to hex format (0xRRGGBB)
-    DWORD activeColorHex = (GetRValue(tabActiveColor) << 16) | (GetGValue(tabActiveColor) << 8) | GetBValue(tabActiveColor);
-    DWORD inactiveColorHex = (GetRValue(tabInactiveColor) << 16) | (GetGValue(tabInactiveColor) << 8) | GetBValue(tabInactiveColor);
-    
-    // Format as hex strings
-    wchar_t activeColorStr[16];
-    wchar_t inactiveColorStr[16];
-    swprintf_s(activeColorStr, L"0x%X", activeColorHex);
-    swprintf_s(inactiveColorStr, L"0x%X", inactiveColorHex);
-    
-    WritePrivateProfileString(L"Colors", L"TabActiveColor", activeColorStr, iniPath.c_str());
-    WritePrivateProfileString(L"Colors", L"TabInactiveColor", inactiveColorStr, iniPath.c_str());
-    
-    // Save scroll speeds to [Scrolling] section
-    std::wstring mouseScrollStr = std::to_wstring(mouseScrollSpeed);
-    std::wstring joystickScrollStr = std::to_wstring(joystickScrollSpeed);
-    WritePrivateProfileString(L"Scrolling", L"MouseScrollSpeed", mouseScrollStr.c_str(), iniPath.c_str());
-    WritePrivateProfileString(L"Scrolling", L"JoystickScrollSpeed", joystickScrollStr.c_str(), iniPath.c_str());
-    
-    // Save per-tab colors to [TabColors] section
-    for (const auto& tabColorPair : tabSpecificColors) {
-        const std::wstring& tabName = tabColorPair.first;
-        COLORREF tabColor = tabColorPair.second;
-        
-        // Convert COLORREF to hex format
-        DWORD tabColorHex = (GetRValue(tabColor) << 16) | (GetGValue(tabColor) << 8) | GetBValue(tabColor);
-        wchar_t tabColorStr[16];
-        swprintf_s(tabColorStr, L"0x%X", tabColorHex);
-        
-        WritePrivateProfileString(L"TabColors", tabName.c_str(), tabColorStr, iniPath.c_str());
-    }
+    Settings& settings = Settings::Instance();
+    settings.SetWindowX(rect.left);
+    settings.SetWindowY(rect.top);
+    settings.SetWindowWidth(rect.right - rect.left);
+    settings.SetWindowHeight(rect.bottom - rect.top);
+    settings.SetActiveTab(activeTabIndex);
+    settings.Save();
 }
 
 void WindowManager::LoadWindowState() {
-    std::wstring iniPath = GetIniFilePath();
-    
-    // Read saved active tab index
-    int savedActiveTab = GetPrivateProfileInt(L"Window", L"ActiveTab", 0, iniPath.c_str());
-    
-    // Load tab colors from INI file (with defaults)
-    // Colors are stored as hex values (e.g., 0x139362 for green)
-    DWORD activeColorHex = GetPrivateProfileInt(L"Colors", L"TabActiveColor", 0x139362, iniPath.c_str());
-    DWORD inactiveColorHex = GetPrivateProfileInt(L"Colors", L"TabInactiveColor", 0x46464D, iniPath.c_str());
-    
-    // Convert hex values to COLORREF (RGB format)
-    tabActiveColor = RGB((activeColorHex >> 16) & 0xFF, (activeColorHex >> 8) & 0xFF, activeColorHex & 0xFF);
-    tabInactiveColor = RGB((inactiveColorHex >> 16) & 0xFF, (inactiveColorHex >> 8) & 0xFF, inactiveColorHex & 0xFF);
-    
-    // Load scroll speeds from INI file (with defaults)
-    mouseScrollSpeed = GetPrivateProfileInt(L"Scrolling", L"MouseScrollSpeed", 60, iniPath.c_str());
-    joystickScrollSpeed = GetPrivateProfileInt(L"Scrolling", L"JoystickScrollSpeed", 120, iniPath.c_str());
-    
-    // Load per-tab colors from [TabColors] section
-    tabSpecificColors.clear();
-    
-    // Get all key names from the TabColors section
-    wchar_t keyNames[4096] = {0};
-    DWORD keyNamesSize = GetPrivateProfileString(L"TabColors", nullptr, L"", keyNames, 4096, iniPath.c_str());
-    
-    if (keyNamesSize > 0) {
-        // Parse the key names (null-separated list)
-        wchar_t* currentKey = keyNames;
-        while (*currentKey) {
-            std::wstring tabName = currentKey;
-            
-            // Get the color value for this tab
-            wchar_t colorValue[32] = {0};
-            GetPrivateProfileString(L"TabColors", tabName.c_str(), L"", colorValue, 32, iniPath.c_str());
-            
-            if (wcslen(colorValue) > 0) {
-                // Parse hex color value (e.g., "0x139362" or "139362")
-                DWORD colorHex = 0;
-                if (wcsstr(colorValue, L"0x") == colorValue || wcsstr(colorValue, L"0X") == colorValue) {
-                    colorHex = wcstoul(colorValue, nullptr, 16);
-                } else {
-                    colorHex = wcstoul(colorValue, nullptr, 16);
-                }
-                
-                // Convert to COLORREF and store
-                COLORREF tabColor = RGB((colorHex >> 16) & 0xFF, (colorHex >> 8) & 0xFF, colorHex & 0xFF);
-                tabSpecificColors[tabName] = tabColor;
-            }
-            
-            // Move to next key name
-            currentKey += wcslen(currentKey) + 1;
-        }
-    }
-    
-    // Store the saved active tab index for later use
-    savedActiveTabIndex = savedActiveTab;
+    Settings& settings = Settings::Instance();
+    savedActiveTabIndex = settings.GetActiveTab();
 }
-
 void WindowManager::HandleTabClick(int x, int y) {
     if (tabs.empty()) {
         return;
@@ -1337,7 +1244,7 @@ void WindowManager::DrawTabs(HDC hdc, const RECT& clientRect) {
         SetTextColor(tabBufferDC, RGB(255, 255, 255));
         SetBkMode(tabBufferDC, TRANSPARENT);
         
-        HFONT hFont = CreateFont(25, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        HFONT hFont = CreateFont(Settings::Instance().GetTabFontSize(), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                 ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         HFONT hOldFont = (HFONT)SelectObject(tabBufferDC, hFont);
@@ -1406,13 +1313,13 @@ void WindowManager::DrawTabs(HDC hdc, const RECT& clientRect) {
 
 RECT WindowManager::GetTabBarRect(const RECT& clientRect) {
     RECT tabBarRect = clientRect;
-    tabBarRect.bottom = tabBarRect.top + DesignConstants::TAB_HEIGHT;
+    tabBarRect.bottom = tabBarRect.top + Settings::Instance().GetTabHeight();
     return tabBarRect;
 }
 
 RECT WindowManager::GetGridRect(const RECT& clientRect) {
     RECT gridRect = clientRect;
-    gridRect.top += DesignConstants::TAB_HEIGHT;
+    gridRect.top += Settings::Instance().GetTabHeight();
     
     // Apply equal margins on all sides (left, right, and additional top margin)
     // The top already has TAB_HEIGHT, so we add GRID_MARGIN to match lateral margins
@@ -1447,17 +1354,12 @@ int WindowManager::GetTabAtPoint(POINT point, const RECT& clientRect) {
 
 COLORREF WindowManager::GetTabColor(const std::wstring& tabName, bool isActive) {
     if (!isActive) {
-        return tabInactiveColor; // All inactive tabs use the same color
+        return Settings::Instance().GetTabInactiveColor();
     }
     
     // Check if this tab has a specific color defined
-    auto it = tabSpecificColors.find(tabName);
-    if (it != tabSpecificColors.end()) {
-        return it->second; // Use tab-specific color
-    }
-    
-    // Fall back to default active color
-    return tabActiveColor;
+    COLORREF tabColor = Settings::Instance().GetTabColor(tabName);
+    return tabColor;
 }
 
 void WindowManager::SetSelectedIcon(int iconIndex, bool fromKeyboard) {
@@ -1554,14 +1456,14 @@ void WindowManager::EnsureSelectedIconVisible() {
     RECT gridRect = GetGridRect(clientRect);
     
     int availableWidth = gridRect.right - gridRect.left;
-    int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-    int itemWidth = physicalIconSize + DesignConstants::ICON_PADDING;
+    int physicalIconSize = GetScaledIconSize();
+    int itemWidth = physicalIconSize + Settings::Instance().GetIconSpacingHorizontal();
     int cols = CalculateGridColumns(gridRect);
     
     // Calculate the selected icon's position
     int row = selectedIconIndex / cols;
-    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
-    int itemHeight = totalItemHeight + DesignConstants::ICON_PADDING;
+    int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + Settings::Instance().GetIconVerticalPadding();
+    int itemHeight = totalItemHeight + Settings::Instance().GetIconSpacingVertical();
     
     // Account for the startY padding in GridRenderer (SELECTION_BORDER_PADDING)
     int iconTop = DesignConstants::SELECTION_BORDER_PADDING + row * itemHeight - scrollOffset;
@@ -1702,7 +1604,7 @@ void WindowManager::HandleControllerInput() {
         // XInput: positive Y = up, negative Y = down
         // Scroll direction: negative = scroll down (content moves up)
         // So we need to invert: -rightStickY
-        int scrollDelta = -rightStickY * joystickScrollSpeed;
+        int scrollDelta = -rightStickY * Settings::Instance().GetJoystickScrollSpeed();
         HandleJoystickScroll(scrollDelta);
     }
 }
@@ -1728,9 +1630,9 @@ void WindowManager::HandleControllerNavigation(int moveX, int moveY) {
             RECT gridRect = GetGridRect(clientRect);
             int cols = CalculateGridColumns(gridRect);
             
-            int physicalIconSize = DesignConstants::TARGET_ICON_SIZE_PIXELS;
-            int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + DesignConstants::LABEL_SPACING;
-            int rowHeight = totalItemHeight + DesignConstants::ICON_PADDING;
+            int physicalIconSize = GetScaledIconSize();
+            int totalItemHeight = physicalIconSize + DesignConstants::LABEL_HEIGHT + Settings::Instance().GetIconVerticalPadding();
+            int rowHeight = totalItemHeight + Settings::Instance().GetIconSpacingVertical();
             
             // Calculate first fully visible row
             int firstFullyVisibleRow = (scrollOffset + rowHeight - 1) / rowHeight;
