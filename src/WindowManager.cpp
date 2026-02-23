@@ -200,13 +200,21 @@ bool WindowManager::CreateMainWindow(HINSTANCE hInstance) {
     // Store the saved active tab index for later use
     savedActiveTabIndex = settings.GetActiveTab();
     
+    // Adjust window size to account for borders/frame
+    // When we save dimensions, we save the outer window rect, but we want those
+    // dimensions to represent the actual usable area, so we need to add frame size
+    RECT adjustRect = {0, 0, windowWidth, windowHeight};
+    AdjustWindowRectEx(&adjustRect, WS_POPUP | WS_THICKFRAME, FALSE, WS_EX_LAYERED | WS_EX_TOOLWINDOW);
+    int adjustedWidth = adjustRect.right - adjustRect.left;
+    int adjustedHeight = adjustRect.bottom - adjustRect.top;
+    
     // Create borderless but resizable window with layered style for transparency
     mainWindow = CreateWindowEx(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW,      // Enable layered window for transparency + hide from taskbar
         WINDOW_CLASS_NAME,
         L"Game Launcher",
         WS_POPUP | WS_THICKFRAME,               // Remove WS_VISIBLE - will show after first paint
-        x, y, windowWidth, windowHeight,
+        x, y, adjustedWidth, adjustedHeight,
         nullptr, nullptr, hInstance, this
     );
     
@@ -590,16 +598,17 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             RECT clientRect;
             GetClientRect(hwnd, &clientRect);
             
-            const int BORDER_WIDTH = 16;  // Wider resize border for easier targeting
+            const int BORDER_WIDTH = 16;  // Wider resize border for sides and bottom
+            const int TOP_BORDER_WIDTH = 4;  // Narrower top border to avoid interfering with tabs
             
             // Check if mouse is within the window bounds (including border area)
             if (clientPt.x >= -BORDER_WIDTH && clientPt.x < clientRect.right + BORDER_WIDTH &&
-                clientPt.y >= -BORDER_WIDTH && clientPt.y < clientRect.bottom + BORDER_WIDTH) {
+                clientPt.y >= -TOP_BORDER_WIDTH && clientPt.y < clientRect.bottom + BORDER_WIDTH) {
                 
                 // Check if in resize border regions
                 bool inLeft = clientPt.x < BORDER_WIDTH;
                 bool inRight = clientPt.x >= clientRect.right - BORDER_WIDTH;
-                bool inTop = clientPt.y < BORDER_WIDTH;
+                bool inTop = clientPt.y < TOP_BORDER_WIDTH;
                 bool inBottom = clientPt.y >= clientRect.bottom - BORDER_WIDTH;
                 
                 // Return appropriate hit test code for resize
@@ -1130,11 +1139,24 @@ void WindowManager::SaveWindowState() {
     RECT rect;
     GetWindowRect(mainWindow, &rect);
     
+    // Reverse the AdjustWindowRectEx calculation to save the intended dimensions
+    // (without frame), so when we load them back, they represent the desired size
+    int windowWidth = rect.right - rect.left;
+    int windowHeight = rect.bottom - rect.top;
+    
+    RECT adjustRect = {0, 0, windowWidth, windowHeight};
+    AdjustWindowRectEx(&adjustRect, WS_POPUP | WS_THICKFRAME, FALSE, WS_EX_LAYERED | WS_EX_TOOLWINDOW);
+    
+    // Calculate the frame size that was added
+    int frameWidth = (adjustRect.right - adjustRect.left) - windowWidth;
+    int frameHeight = (adjustRect.bottom - adjustRect.top) - windowHeight;
+    
+    // Save dimensions without the frame
     Settings& settings = Settings::Instance();
     settings.SetWindowX(rect.left);
     settings.SetWindowY(rect.top);
-    settings.SetWindowWidth(rect.right - rect.left);
-    settings.SetWindowHeight(rect.bottom - rect.top);
+    settings.SetWindowWidth(windowWidth - frameWidth);
+    settings.SetWindowHeight(windowHeight - frameHeight);
     settings.SetActiveTab(activeTabIndex);
     settings.Save();
 }
