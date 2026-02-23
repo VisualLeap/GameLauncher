@@ -136,11 +136,11 @@ struct DesignConstants {
     static const COLORREF ACCENT_COLOR = RGB(0, 122, 255);         // Modern blue
     static const COLORREF HOVER_COLOR = RGB(255, 255, 255);        // White highlight
     static const int TARGET_ICON_SIZE_PIXELS = 256;                // Target physical icon size in pixels
-    static const int ICON_PADDING = 30;                            // Space between icons
+    static const int ICON_PADDING = 12;                            // Space between icons
     static const int GRID_MARGIN = 24;                             // Grid margins
     static const int TAB_HEIGHT = 40;                              // Tab bar height
-    static const int LABEL_HEIGHT = 70;                            // Icon label height
-    static const int LABEL_SPACING = 8;                            // Spacing between icon and label
+    static const int LABEL_HEIGHT = 92;                            // Icon label height
+    static const int LABEL_SPACING = 4;                            // Spacing between icon and label
     static const int SELECTION_BORDER_INFLATE = 3;                 // InflateRect amount for selection border
     static const int SELECTION_BORDER_PEN_WIDTH = 4;               // Selection border pen width
     static const int SELECTION_BORDER_EXTENSION = SELECTION_BORDER_INFLATE + SELECTION_BORDER_PEN_WIDTH / 2; // Total extension above/below icon

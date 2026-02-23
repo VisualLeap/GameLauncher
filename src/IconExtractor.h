@@ -29,8 +29,6 @@ private:
     
     HICON ExtractIconFromPE(const std::wstring& filePath);
     HICON LoadIconFromFile(const std::wstring& iconPath);
-    bool ValidateIconSize(HICON icon, const std::wstring& filePath);
-    void ShowIconSizeError(const std::wstring& filePath, int actualWidth, int actualHeight);
     
     std::wstring GenerateCacheKey(const std::wstring& filePath, int iconIndex);
     bool IsValidIcon(HICON icon);

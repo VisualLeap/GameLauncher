@@ -27,12 +27,6 @@ HICON IconExtractor::ExtractFromExecutable(const std::wstring& exePath, int icon
         return nullptr;
     }
     
-    // Validate icon size
-    if (!ValidateIconSize(icon, exePath)) {
-        DestroyIcon(icon);
-        return nullptr;
-    }
-    
     // Cache and return
     iconCache[cacheKey] = icon;
     return icon;
@@ -53,12 +47,6 @@ HICON IconExtractor::ExtractFromIconFile(const std::wstring& iconPath) {
     // Load icon from file
     HICON icon = LoadIconFromFile(iconPath);
     if (!icon) {
-        return nullptr;
-    }
-    
-    // Validate icon size
-    if (!ValidateIconSize(icon, iconPath)) {
-        DestroyIcon(icon);
         return nullptr;
     }
     
@@ -151,34 +139,6 @@ HICON IconExtractor::LoadIconFromFile(const std::wstring& iconPath) {
     );
     
     return icon;
-}
-
-bool IconExtractor::ValidateIconSize(HICON icon, const std::wstring& /*filePath*/) {
-    if (!icon) {
-        return false;
-    }
-    
-    ICONINFO iconInfo;
-    if (!GetIconInfo(icon, &iconInfo)) {
-        return false;
-    }
-    
-    BITMAP bmp;
-    bool success = false;
-    
-    if (GetObject(iconInfo.hbmColor, sizeof(bmp), &bmp)) {
-        success = true;
-    }
-    
-    // Clean up
-    DeleteObject(iconInfo.hbmColor);
-    DeleteObject(iconInfo.hbmMask);
-    
-    return success;
-}
-
-void IconExtractor::ShowIconSizeError(const std::wstring& /*filePath*/, int /*actualWidth*/, int /*actualHeight*/) {
-    // Silently ignore icon size errors
 }
 
 std::wstring IconExtractor::GenerateCacheKey(const std::wstring& filePath, int iconIndex) {

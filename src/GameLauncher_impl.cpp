@@ -1,5 +1,6 @@
 // GameLauncher_impl.cpp - Main application implementation
 #include "GameLauncher.h"
+#include "Settings.h"
 #include <iostream>
 #include <shellscalingapi.h>
 
@@ -34,6 +35,9 @@ GameLauncher::~GameLauncher() {
 
 bool GameLauncher::Initialize() {
     // DPI awareness is now set in WinMain before this function is called
+    
+    // Load settings from INI file first
+    Settings::Instance().Load();
     
     // Check for single instance
     if (!CheckSingleInstance()) {

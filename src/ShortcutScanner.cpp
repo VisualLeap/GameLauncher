@@ -2,6 +2,8 @@
 #include "ShortcutScanner.h"
 #include "ShortcutParser.h"
 #include "IconExtractor.h"
+#include "Settings.h"
+#include "stb_image_resize2.h"
 #include <filesystem>
 #include <algorithm>
 
@@ -264,9 +266,8 @@ bool ShortcutScanner::ProcessShortcutFile(const std::wstring& filePath, Shortcut
             icon = iconExtractor->ExtractFromExecutable(info.targetPath, info.iconIndex);
         }
         
-        // Convert HICON to 32-bit ARGB bitmap for efficient alpha blending
+        // Convert HICON to 32-bit ARGB bitmap with SIMD-accelerated resampling
         if (icon) {
-            // Get icon info (size and mask)
             ICONINFO iconInfo;
             if (GetIconInfo(icon, &iconInfo)) {
                 BITMAP bm;
@@ -274,7 +275,7 @@ bool ShortcutScanner::ProcessShortcutFile(const std::wstring& filePath, Shortcut
                 int iconWidth = bm.bmWidth;
                 int iconHeight = bm.bmHeight;
                 
-                // Create a 32-bit ARGB DIB section
+                // Create a 32-bit ARGB DIB section for source icon
                 BITMAPINFO bmi = {};
                 bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
                 bmi.bmiHeader.biWidth = iconWidth;
@@ -283,70 +284,91 @@ bool ShortcutScanner::ProcessShortcutFile(const std::wstring& filePath, Shortcut
                 bmi.bmiHeader.biBitCount = 32;
                 bmi.bmiHeader.biCompression = BI_RGB;
                 
-                void* bits = nullptr;
+                void* srcBits = nullptr;
                 HDC hdcScreen = GetDC(nullptr);
-                HBITMAP hbm = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+                HBITMAP hbmSrc = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &srcBits, nullptr, 0);
                 
-                if (hbm && bits) {
-                    // Fill with background color to fix antialiasing
-                    DWORD* pixels = (DWORD*)bits;
-                    COLORREF bgColor = RGB(28, 28, 30);  // DesignConstants::BACKGROUND_COLOR
+                if (hbmSrc && srcBits) {
+                    // Fill with background color
+                    DWORD* srcPixels = (DWORD*)srcBits;
+                    //memset(srcPixels, 0x30, iconHeight * iconHeight * 4);
+                    /*COLORREF bgColor = RGB(28, 28, 30);
                     BYTE bgR = GetRValue(bgColor);
                     BYTE bgG = GetGValue(bgColor);
                     BYTE bgB = GetBValue(bgColor);
-                    DWORD bgPixel = (bgB << 16) | (bgG << 8) | bgR;  // BGR format for DIB
+                    DWORD bgPixel = (bgB << 16) | (bgG << 8) | bgR;
                     
                     for (int i = 0; i < iconWidth * iconHeight; i++) {
-                        pixels[i] = bgPixel;
-                    }
+                        srcPixels[i] = bgPixel;
+                    }*/
                     
-                    // Draw icon to bitmap (will blend with background color)
+                    // Draw icon to source bitmap
                     HDC hdcMem = CreateCompatibleDC(hdcScreen);
-                    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbm);
+                    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbmSrc);
                     DrawIconEx(hdcMem, 0, 0, icon, iconWidth, iconHeight, 0, nullptr, DI_NORMAL);
                     SelectObject(hdcMem, hbmOld);
                     DeleteDC(hdcMem);
-                    
-                    // Read mask bitmap data efficiently using GetDIBits
-                    if (iconInfo.hbmMask) {
-                        BITMAPINFO maskBmi = {};
-                        maskBmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-                        maskBmi.bmiHeader.biWidth = iconWidth;
-                        maskBmi.bmiHeader.biHeight = -iconHeight;  // Top-down
-                        maskBmi.bmiHeader.biPlanes = 1;
-                        maskBmi.bmiHeader.biBitCount = 32;
-                        maskBmi.bmiHeader.biCompression = BI_RGB;
+
+                    // Premultiply alpha channel
+                    for (int i = 0; i < iconWidth * iconHeight; i++) {
+                        BYTE alpha = (srcPixels[i] >> 24) & 0xFF;
+                        BYTE r = (srcPixels[i] >> 16) & 0xFF;
+                        BYTE g = (srcPixels[i] >> 8) & 0xFF;
+                        BYTE b = srcPixels[i] & 0xFF;
                         
-                        DWORD* maskBits = new DWORD[iconWidth * iconHeight];
-                        HDC hdcMask = CreateCompatibleDC(hdcScreen);
+                        r = (r * alpha) / 255;
+                        g = (g * alpha) / 255;
+                        b = (b * alpha) / 255;
                         
-                        if (GetDIBits(hdcMask, iconInfo.hbmMask, 0, iconHeight, maskBits, &maskBmi, DIB_RGB_COLORS)) {
-                            // Set alpha based on mask (white in mask = transparent, black = opaque)
-                            for (int i = 0; i < iconWidth * iconHeight; i++) {
-                                DWORD maskPixel = maskBits[i];
-                                BYTE maskLuminance = (maskPixel & 0xFF);  // Get blue channel (BGR format)
-                                
-                                if (maskLuminance > 128) {
-                                    // Transparent pixel - set alpha to 0
-                                    pixels[i] = 0;
-                                } else {
-                                    // Opaque pixel - set alpha to 255 and premultiply
-                                    BYTE r = (pixels[i] >> 16) & 0xFF;
-                                    BYTE g = (pixels[i] >> 8) & 0xFF;
-                                    BYTE b = pixels[i] & 0xFF;
-                                    pixels[i] = (255 << 24) | (r << 16) | (g << 8) | b;
-                                }
-                            }
-                        }
-                        
-                        delete[] maskBits;
-                        DeleteDC(hdcMask);
+                        srcPixels[i] = (alpha << 24) | (r << 16) | (g << 8) | b;
                     }
                     
-                    // Store the bitmap
-                    info.iconBitmap = hbm;
-                    info.iconBitmapWidth = iconWidth;
-                    info.iconBitmapHeight = iconHeight;
+                    // Use stb_image_resize2 for high-quality SIMD-accelerated resampling
+                    float iconScale = Settings::Instance().GetIconScale();
+                    int targetWidth = static_cast<int>(256 * iconScale);
+                    int targetHeight = static_cast<int>(256 * iconScale);
+                    
+                    // Only resample if source is not already target size
+                    if (iconWidth != targetWidth || iconHeight != targetHeight) {
+                        // Create destination bitmap
+                        BITMAPINFO dstBmi = {};
+                        dstBmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                        dstBmi.bmiHeader.biWidth = targetWidth;
+                        dstBmi.bmiHeader.biHeight = -targetHeight;
+                        dstBmi.bmiHeader.biPlanes = 1;
+                        dstBmi.bmiHeader.biBitCount = 32;
+                        dstBmi.bmiHeader.biCompression = BI_RGB;
+                        
+                        void* dstBits = nullptr;
+                        HBITMAP hbmDst = CreateDIBSection(hdcScreen, &dstBmi, DIB_RGB_COLORS, &dstBits, nullptr, 0);
+                        
+                        if (hbmDst && dstBits) {
+                            // Resample using stb with bilinear filter and premultiplied alpha (SIMD-accelerated)
+                            stbir_resize_uint8_linear(
+                                (unsigned char*)srcBits, iconWidth, iconHeight, iconWidth * 4,
+                                (unsigned char*)dstBits, targetWidth, targetHeight, targetWidth * 4,
+                                STBIR_RGBA_PM  // Premultiplied alpha - required for AlphaBlend
+                            );
+                            
+                            // Store the resampled bitmap
+                            info.iconBitmap = hbmDst;
+                            info.iconBitmapWidth = targetWidth;
+                            info.iconBitmapHeight = targetHeight;
+                            
+                            // Clean up source bitmap
+                            DeleteObject(hbmSrc);
+                        } else {
+                            // Fallback: use source bitmap if resampling fails
+                            info.iconBitmap = hbmSrc;
+                            info.iconBitmapWidth = iconWidth;
+                            info.iconBitmapHeight = iconHeight;
+                        }
+                    } else {
+                        // No resampling needed
+                        info.iconBitmap = hbmSrc;
+                        info.iconBitmapWidth = iconWidth;
+                        info.iconBitmapHeight = iconHeight;
+                    }
                 }
                 
                 // Clean up iconInfo bitmaps

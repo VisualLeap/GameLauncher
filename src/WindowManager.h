@@ -51,15 +51,6 @@ private:
     int lastSelectedIconIndex; // Last selected icon before it was cleared (for resuming navigation)
     bool usingKeyboardNavigation; // Whether last selection was via keyboard
     
-    // Customizable tab colors (loaded from INI file)
-    COLORREF tabActiveColor;        // Default active color
-    COLORREF tabInactiveColor;      // Inactive color (same for all tabs)
-    std::map<std::wstring, COLORREF> tabSpecificColors; // Per-tab colors
-    
-    // Configurable scroll speeds (loaded from INI file)
-    int mouseScrollSpeed;           // Mouse wheel scroll speed (pixels per notch)
-    int joystickScrollSpeed;        // Joystick scroll speed multiplier
-    
     // Persistent offscreen buffer for double buffering (to avoid memory fragmentation)
     HDC offscreenDC;
     HBITMAP offscreenBitmap;
@@ -106,6 +97,7 @@ private:
     
     // Helper methods to reduce code duplication
     std::wstring GetIniFilePath() const;             // Get path to launcher.ini
+    int GetScaledIconSize() const;                   // Get icon size with scale applied
     int CalculateGridColumns(const RECT& gridRect) const; // Calculate number of grid columns
     RECT GetOptimizedGridRect(const RECT& gridRect, int cols, int itemWidth, int availableWidth) const; // Get optimized repaint rect
     RECT GetGridRelativeRect(const RECT& gridRect) const; // Get grid-relative rect for hit testing
