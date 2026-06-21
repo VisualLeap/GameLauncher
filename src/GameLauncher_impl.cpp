@@ -13,18 +13,13 @@
 GameLauncher* GameLauncher::instance = nullptr;
 const wchar_t* GameLauncher::MUTEX_NAME = L"GameLauncherSingleInstance";
 const wchar_t* GameLauncher::MESSAGE_WINDOW_CLASS = L"GameLauncherMessageWindow";
-const UINT GameLauncher::WM_SHOW_WINDOW = WM_USER + 1;
+const UINT GameLauncher::WM_TOGGLE_VISIBILITY = WM_USER + 1;
 
 GameLauncher::GameLauncher() 
     : singleInstanceMutex(nullptr)
     , messageWindow(nullptr)
 {
     instance = this;
-    
-    // Initialize components
-    windowManager = std::make_unique<WindowManager>();
-    trayManager = std::make_unique<TrayManager>();
-    scanner = std::make_unique<ShortcutScanner>();
 }
 
 GameLauncher::~GameLauncher() {
@@ -36,30 +31,31 @@ GameLauncher::~GameLauncher() {
 bool GameLauncher::Initialize() {
     // DPI awareness is now set in WinMain before this function is called
     
-    // Load settings from INI file first
-    Settings::Instance().Load();
-    
-    // Check for single instance
-    if (!CheckSingleInstance()) {
+    // Get executable folder
+    wchar_t buffer[MAX_PATH];
+    GetModuleFileNameW(NULL, buffer, MAX_PATH);
+    std::wstring path(buffer);
+    size_t pos = path.find_last_of(L"\\/");
+    if (pos == std::wstring::npos)
         return false;
-    }
+    std::wstring exeFolder = path.substr(0, pos);
+    
+    // Initialize components
+    windowManager = std::make_unique<WindowManager>();
+    trayManager = std::make_unique<TrayManager>();
+    scanner = std::make_unique<ShortcutScanner>();
+
+    // Load settings from INI file first
+    Settings::Instance().Load(exeFolder);
     
     // Create message window for inter-process communication
     CreateMessageWindow();
     
-    // Set shortcut folder to Data subfolder
-    std::wstring dataFolder = L"Data";
-    config.shortcutFolder = dataFolder;
-    
     // Initialize scanner with folder
-    if (!scanner->Initialize()) {
+    if (!scanner->Initialize(exeFolder + L"\\Data")) {
         return false;
     }
-    
-    if (!scanner->SetFolder(dataFolder)) {
-        // Continue anyway - user can fix this later
-    }
-    
+  
     // Connect shortcut scanner to window manager BEFORE creating window
     windowManager->SetShortcutScanner(scanner.get());
     
@@ -98,7 +94,7 @@ int GameLauncher::Run() {
             }
         } else {
             // No Windows messages - check controller input if window is visible and has focus
-            if (windowManager && windowManager->IsVisible() && windowManager->HasFocus()) {
+            if (windowManager && windowManager->IsVisible()/* && windowManager->HasFocus()*/) {
                 windowManager->HandleControllerInput();
             }
             
@@ -136,10 +132,10 @@ bool GameLauncher::CheckSingleInstance() {
     singleInstanceMutex = CreateMutex(nullptr, TRUE, MUTEX_NAME);
     
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        // Another instance is running - signal it to show window
+        // Another instance is running - toggle window visibility
         HWND existingWindow = FindWindow(MESSAGE_WINDOW_CLASS, nullptr);
         if (existingWindow) {
-            PostMessage(existingWindow, WM_SHOW_WINDOW, 0, 0);
+            PostMessage(existingWindow, WM_TOGGLE_VISIBILITY, 0, 0);
         }
         
         // Clean up and exit this instance
@@ -179,13 +175,8 @@ void GameLauncher::CreateMessageWindow() {
 
 void GameLauncher::HandleSecondInstanceSignal() {
     // Show the main window if it exists and is hidden
-    if (windowManager) {
-        if (!windowManager->IsVisible()) {
-            windowManager->ShowWindow();
-        } else {
-            windowManager->BringToForeground();
-        }
-    }
+    if (windowManager)
+        windowManager->ToggleVisibility();
 }
 
 void GameLauncher::HandleTrayMessage(WPARAM wParam, LPARAM lParam) {
@@ -195,7 +186,7 @@ void GameLauncher::HandleTrayMessage(WPARAM wParam, LPARAM lParam) {
 }
 
 LRESULT CALLBACK GameLauncher::MessageWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg == WM_SHOW_WINDOW && instance) {
+    if (uMsg == WM_TOGGLE_VISIBILITY && instance) {
         instance->HandleSecondInstanceSignal();
         return 0;
     }

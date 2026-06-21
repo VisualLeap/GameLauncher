@@ -2,9 +2,6 @@
 .vs/
 *.user
 
-# Kiro IDE
-.kiro/
-
 # Compiled executables (in root)
 /*.exe
 /*.pdb

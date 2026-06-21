@@ -14,6 +14,7 @@ public:
     GameLauncher();
     ~GameLauncher();
 
+    bool CheckSingleInstance();
     bool Initialize();
     int Run();
     void Shutdown();
@@ -30,11 +31,7 @@ private:
     HANDLE singleInstanceMutex;
     HWND messageWindow;
     
-    // Configuration
-    LauncherConfig config;
-    
     // Private methods
-    bool CheckSingleInstance();
     void CreateMessageWindow();
     
     // Static window procedure for message window
@@ -44,5 +41,5 @@ private:
     // Constants
     static const wchar_t* MUTEX_NAME;
     static const wchar_t* MESSAGE_WINDOW_CLASS;
-    static const UINT WM_SHOW_WINDOW;
+    static const UINT WM_TOGGLE_VISIBILITY;
 };

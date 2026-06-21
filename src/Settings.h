@@ -17,7 +17,7 @@ public:
     Settings& operator=(const Settings&) = delete;
     
     // Load/Save
-    void Load();
+    void Load(const std::wstring& path);
     void Save();
     
     // Window settings
@@ -69,8 +69,8 @@ public:
 private:
     Settings();
     
-    std::wstring GetIniPath() const;
-    
+    std::wstring iniPath = L"";
+
     // Window
     int windowX = -32768;
     int windowY = -32768;

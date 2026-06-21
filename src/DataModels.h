@@ -111,25 +111,6 @@ struct TabInfo {
     TabInfo& operator=(const TabInfo&) = delete;
 };
 
-// Application configuration structure
-struct LauncherConfig {
-    std::wstring shortcutFolder;   // Input folder path
-    bool startMinimized;           // Start in tray
-    int windowWidth;               // Last window width
-    int windowHeight;              // Last window height
-    int windowPosX;                // Last window X position
-    int windowPosY;                // Last window Y position
-    
-    // Constructor with defaults
-    LauncherConfig()
-        : startMinimized(false)
-        , windowWidth(800)
-        , windowHeight(600)
-        , windowPosX(CW_USEDEFAULT)
-        , windowPosY(CW_USEDEFAULT)
-    {}
-};
-
 // Design constants for modern aesthetic
 struct DesignConstants {
     static const COLORREF BACKGROUND_COLOR = RGB(28, 28, 30);      // Dark charcoal

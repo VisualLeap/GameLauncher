@@ -15,7 +15,7 @@ ShortcutScanner::ShortcutScanner()
 ShortcutScanner::~ShortcutScanner() {
 }
 
-bool ShortcutScanner::Initialize() {
+bool ShortcutScanner::Initialize(const std::wstring& folderPath) {
     // Create parser and icon extractor
     parser = std::make_unique<ShortcutParser>();
     iconExtractor = std::make_unique<IconExtractor>();
@@ -27,19 +27,8 @@ bool ShortcutScanner::Initialize() {
     
     // Clear icon cache to ensure fresh extraction
     iconExtractor->ClearCache();
-    
-    return true;
-}
 
-bool ShortcutScanner::SetFolder(const std::wstring& folderPath) {
     scanFolder = folderPath;
-    
-    // Check if folder exists
-    DWORD attributes = GetFileAttributes(folderPath.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        return false;
-    }
-    
     return true;
 }
 

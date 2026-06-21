@@ -269,7 +269,7 @@ bool WindowManager::IsWindows11OrGreater() {
 void WindowManager::ShowWindow() {
     if (mainWindow) {
         // More forceful approach to showing the window
-        ::ShowWindow(mainWindow, SW_HIDE);  // First hide it
+        //::ShowWindow(mainWindow, SW_HIDE);  // First hide it
         ::ShowWindow(mainWindow, SW_SHOW);  // Then show it
         
         // Bring to foreground and activate
@@ -538,7 +538,7 @@ LRESULT WindowManager::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
                                 BYTE b = pixel & 0xFF;
                                 
                                 // Check for selection border pixels (grey or white)
-                                bool isGreyBorder = (r > 50 && r < 80 && g > 50 && g < 80 && b > 50 && b < 80);
+                                bool isGreyBorder = (r > 20 && r < 80 && g > 20 && g < 80 && b > 20 && b < 80);
                                 bool isWhiteBorder = (r > 250 && g > 250 && b > 250);
                                 if (isGreyBorder || isWhiteBorder) {
                                     pixels[i] = (255 << 24) | (r << 16) | (g << 8) | b;
@@ -1196,10 +1196,16 @@ void WindowManager::SetActiveTab(int tabIndex) {
     // Reset scroll offset when switching tabs
     scrollOffset = 0;
     
-    // Reset selection when switching tabs
-    selectedIconIndex = -1;
-    lastSelectedIconIndex = -1;  // Clear last selection from previous tab
-    usingKeyboardNavigation = false;
+    // Select first icon when switching tabs
+    if (!tabs[tabIndex].shortcuts.empty()) {
+        selectedIconIndex = 0;
+        lastSelectedIconIndex = 0;
+        usingKeyboardNavigation = true;
+    } else {
+        selectedIconIndex = -1;
+        lastSelectedIconIndex = -1;
+        usingKeyboardNavigation = false;
+    }
     
     // Update grid renderer to point directly to the active tab's shortcuts
     if (gridRenderer && activeTabIndex < static_cast<int>(tabs.size())) {
@@ -1541,7 +1547,7 @@ void WindowManager::HandleControllerInput() {
     if (!controllerManager->IsConnected()) {
         return;
     }
-    
+
     // Handle B button - hide window
     if (controllerManager->IsButtonPressed(XINPUT_GAMEPAD_B)) {
         HideWindow();

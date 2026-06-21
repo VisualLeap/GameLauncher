@@ -16,8 +16,7 @@ public:
     ShortcutScanner();
     ~ShortcutScanner();
 
-    bool Initialize();
-    bool SetFolder(const std::wstring& folderPath);
+    bool Initialize(const std::wstring& folderPath);
     void SetWindowManager(WindowManager* windowMgr) { windowManager = windowMgr; }
     std::vector<ShortcutInfo> ScanShortcuts();
     std::vector<TabInfo> ScanTabs();  // New method for tab scanning

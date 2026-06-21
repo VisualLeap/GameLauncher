@@ -24,7 +24,7 @@ GridRenderer::GridRenderer()
     
     // Create cached pens for selection borders
     cachedSelectionPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(255, 255, 255));
-    cachedShadowPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(64, 64, 64));
+    cachedShadowPen = CreatePen(PS_SOLID, DesignConstants::SELECTION_BORDER_PEN_WIDTH, RGB(32, 32, 32));
 }
 
 GridRenderer::~GridRenderer() {
@@ -98,20 +98,22 @@ void GridRenderer::Render(HDC hdc, const RECT& clientRect) {
                 RECT selectionRect = iconRect;
                 InflateRect(&selectionRect, DesignConstants::SELECTION_BORDER_INFLATE, DesignConstants::SELECTION_BORDER_INFLATE);
                 
-                // Draw red shadow outline first (offset by 2px)
+                // Draw interior shadow outline first
                 RECT shadowRect = selectionRect;
-                int shadowOffset = 2;
+                int shadowOffset = DesignConstants::SELECTION_BORDER_PEN_WIDTH;
                 shadowRect.left += shadowOffset;
                 shadowRect.top += shadowOffset;
-                shadowRect.right += shadowOffset;
-                shadowRect.bottom += shadowOffset;
+                shadowRect.right -= shadowOffset;
+                shadowRect.bottom -= shadowOffset;
                 HPEN oldPen = (HPEN)SelectObject(hdc, cachedShadowPen);
                 HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                int oldROP = SetROP2(hdc, R2_COPYPEN);
                 Rectangle(hdc, shadowRect.left, shadowRect.top, shadowRect.right, shadowRect.bottom);
                 
                 // Draw white selection outline on top
                 SelectObject(hdc, cachedSelectionPen);
                 Rectangle(hdc, selectionRect.left, selectionRect.top, selectionRect.right, selectionRect.bottom);
+                SetROP2(hdc, oldROP);
                 
                 SelectObject(hdc, oldPen);
                 SelectObject(hdc, oldBrush);
